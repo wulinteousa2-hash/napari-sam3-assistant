@@ -26,7 +26,7 @@ Known hardware note: NVIDIA DGX Spark / GB10 ARM64 systems are new and may requi
 - SAM 3 checkpoint directory containing:
   - `config.json`
   - `processor_config.json`
-  - one of `sam3.pt`, `model.safetensors`, or `pytorch_model.bin`
+  - one of `sam3.pt`, `model.safetensors`
 - PyTorch and torchvision installed for your platform
 https://huggingface.co/facebook/sam3/tree/main
 GPU use requires a PyTorch/torchvision/SAM3 stack compiled for your GPU architecture. If CUDA kernels are not available for the device, select `CPU` in the widget.
@@ -95,8 +95,8 @@ After approval, download the model files and configuration files from the Files 
 
 A reference screenshot is provided here:
 
-docs/sam3_model_files.png
-Files to download
+![SAM 3 model files screenshot](docs/sam3_model_files.png)
+
 
 Keep the downloaded SAM 3 files together in a single local directory. At minimum, the plugin expects the model directory to contain:
 
@@ -104,8 +104,7 @@ config.json
 processor_config.json
 one weight file:
 sam3.pt, or
-model.safetensors, or
-pytorch_model.bin
+model.safetensors
 
 Depending on the model layout from Hugging Face, the directory may also include tokenizer and text-related files such as:
 
@@ -120,9 +119,6 @@ Choose one directory and keep all downloaded SAM 3 files there. For example:
 
 ~/Projects/napari/sam3/model/
 
-or
-
-~/models/sam3/
 
 or another project-local path of your choice.
 
@@ -175,12 +171,12 @@ The plugin does not compile PyTorch, torchvision, or SAM3 CUDA extensions.
 
 ## Model Setup
 
-Download or prepare a local SAM 3 checkpoint directory. The widget expects a directory, not just a single file. `~/models/sam3` is the recommended default location, but any readable directory can be used.
+Download or prepare a local SAM 3 checkpoint directory. The widget expects a directory, not just a single file. `~sam3/model/` is the recommended default location, but any readable directory can be used.
 
 Expected layout:
 
 ```text
-~/models/sam3/
+~sam3/model/
   config.json
   processor_config.json
   sam3.pt
@@ -190,7 +186,6 @@ Other supported weight names:
 
 ```text
 model.safetensors
-pytorch_model.bin
 ```
 
 In the widget:
@@ -442,8 +437,7 @@ The test suite covers coordinate mapping, prompt collection, adapter utility beh
 
 - SAM 3 repository: https://github.com/facebookresearch/sam3
 - PyTorch installation selector: https://pytorch.org/get-started/locally/
-- napari plugin documentation: https://napari.org/plugins/
-- napari publishing guide: https://napari.org/stable/plugins/testing_and_publishing/deploy.html
+- Hugging Face https://huggingface.co/facebook/sam3
 
 ## License
 

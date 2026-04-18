@@ -10,4 +10,4 @@ contributions:
 
   widgets:
     - command: napari-sam3-assistant.make_widget
-      display_name: sam3 assistant
+      display_name: SAM3 Assistant

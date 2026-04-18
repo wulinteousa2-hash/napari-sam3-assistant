@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "napari-sam3-assistant"
 version = "0.0.1"
-description = "A napari plugin for SAM3 text, box, exemplar, refinement, and video-like segmentation workflows."
+description = "A napari plugin for SAM3 text, box, exemplar, refinement, and 3D/video-like segmentation workflows."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
