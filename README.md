@@ -59,7 +59,7 @@ pip install -e .
 Install this napari plugin:
 
 ```bash
-git clone <YOUR_REPOSITORY_URL>
+git clone https://github.com/wulinteousa2-hash/napari-sam3-assistant
 cd napari-sam3-assistant
 pip install -e .
 ```
