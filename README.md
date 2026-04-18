@@ -14,39 +14,42 @@ SAM 3 is not bundled with this plugin. Install the SAM 3 backend and download th
 
 ## Status
 
-This project is under active development. The current widget supports the main napari interaction model, local SAM 3 model loading, prompt collection, background execution, and writing results back to napari layers.
-
-Known hardware note: NVIDIA DGX Spark / GB10 ARM64 systems are new and may require NVIDIA or preview PyTorch builds for full CUDA kernel coverage. CPU mode is the safest fallback.
+This project is under active development. The current widget supports local SAM 3 model loading, napari prompt collection, background execution, and writing results back to napari layers.
 
 ## Requirements
 
 - Python `>=3.12`
 - napari `>=0.5`
 - SAM 3 Python package importable as `sam3`
-- SAM 3 checkpoint directory containing:
+- PyTorch and torchvision installed for your platform
+- A local SAM 3 checkpoint directory containing:
   - `config.json`
   - `processor_config.json`
-  - one of `sam3.pt`, `model.safetensors`
-- PyTorch and torchvision installed for your platform
-https://huggingface.co/facebook/sam3/tree/main
-GPU use requires a PyTorch/torchvision/SAM3 stack compiled for your GPU architecture. If CUDA kernels are not available for the device, select `CPU` in the widget.
+  - one weight file such as `sam3.pt` or `model.safetensors`
+GPU use requires a PyTorch / torchvision / SAM 3 stack that is compatible with your GPU architecture. If CUDA kernels are not available for the device, select **CPU** in the widget.
 
-## Installation
+## Setup
 
-Create an environment with Python 3.12 or newer:
+Setup has three parts:
+
+1. Install the SAM 3 backend.
+2. Download the SAM 3 model files from Hugging Face and configure the model path.
+3. Install this napari plugin.
+
+### 1. Install SAM 3
+
+Create and activate an environment:
 
 ```bash
 conda create -n napari-sam3 python=3.12
 conda activate napari-sam3
 ```
 
-Install PyTorch for your platform. Use the official PyTorch selector when possible:
+Install PyTorch and torchvision for your platform. Use the official PyTorch selector for the current command:
 
 ```bash
 pip install torch torchvision
 ```
-
-For CUDA systems, install a CUDA-enabled PyTorch build that matches your driver and platform. See the PyTorch installation page for current commands.
 
 Install SAM 3:
 
@@ -56,7 +59,49 @@ cd sam3
 pip install -e .
 ```
 
-Install this napari plugin:
+### 2. Download SAM 3 Weights
+
+This plugin does not ship with SAM 3 weights or model configuration files. Download them from the official Hugging Face repository:
+
+```text
+https://huggingface.co/facebook/sam3
+```
+
+The repository is gated. Sign in to Hugging Face, open `facebook/sam3`, accept or request access, then download the files from the repository.
+
+Recommended download method:
+
+```bash
+pip install -U huggingface_hub
+hf auth login
+mkdir -p ~/models/sam3
+hf download facebook/sam3 --local-dir ~/models/sam3
+```
+
+Expected model directory:
+
+```text
+~/models/sam3/
+  config.json
+  processor_config.json
+  sam3.pt
+```
+
+`model.safetensors` is also supported as a weight file. Depending on the Hugging Face layout, the directory may also contain tokenizer files such as `tokenizer.json`, `vocab.json`, and `merges.txt`.
+
+Keep all downloaded model files together in one directory. In the plugin widget, click `Browse`, select that directory, then click `Validate`.
+
+Do not put downloaded weights inside the SAM 3 Python source package, for example `sam3/sam3/model`. If you want a project-local model folder, use a separate directory such as:
+
+```text
+~/Projects/napari/sam3/model
+```
+
+The selected model directory is remembered by the widget.
+
+### 3. Install napari-sam3-assistant
+
+Install this plugin:
 
 ```bash
 git clone https://github.com/wulinteousa2-hash/napari-sam3-assistant
@@ -64,7 +109,7 @@ cd napari-sam3-assistant
 pip install -e .
 ```
 
-Run napari:
+Start napari:
 
 ```bash
 napari
@@ -76,136 +121,10 @@ Open the widget from:
 Plugins > SAM3 Assistant
 ```
 
-
-## Getting SAM 3 Model Files
-
-This plugin does not ship with SAM 3 weights or model configuration files. You must obtain them from the official Hugging Face SAM 3 repository:
-
-```text
-https://huggingface.co/facebook/sam3
-Access requirement
-```
-The SAM 3 repository is gated.
-
-Sign in to your Hugging Face account.
-Open the facebook/sam3 model page.
-Request access by filling in the required form.
-Wait until access is approved.
-After approval, download the model files and configuration files from the Files and versions tab.
-
-A reference screenshot is provided here:
-
-![SAM 3 model files screenshot](docs/sam3_model_files.png)
-
-
-Keep the downloaded SAM 3 files together in a single local directory. At minimum, the plugin expects the model directory to contain:
-
-config.json
-processor_config.json
-one weight file:
-sam3.pt, or
-model.safetensors
-
-Depending on the model layout from Hugging Face, the directory may also include tokenizer and text-related files such as:
-
-merges.txt
-tokenizer.json
-tokenizer_config.json
-special_tokens_map.json
-vocab.json
-Recommended local layout
-
-Choose one directory and keep all downloaded SAM 3 files there. For example:
-
-~/Projects/napari/sam3/model/
-
-
-or another project-local path of your choice.
-
-Then, in the plugin widget, select that directory as the model directory.
-
-About sam3/model
-
-In this project, sam3/model/ is a user-created local folder for storing downloaded SAM 3 model assets. It is not provided by the upstream SAM 3 repository by default.
-
-If you intentionally created sam3/model/ to hold the downloaded weights and configuration files, that is an acceptable layout for this project. The important requirement is that all required SAM 3 files remain together in one directory and that you select that directory in the widget.
-
-
-
-
-## ARM64, CUDA, and DGX Spark
-
-For ARM64 systems such as NVIDIA DGX Spark / GB10:
-
-- Use Python 3.12 or newer.
-- Keep the NVIDIA driver and CUDA stack current. DGX Spark systems commonly report a CUDA 13.x capable driver.
-- Verify PyTorch sees the GPU:
-
-```bash
-python - <<'PY'
-import torch
-print("torch:", torch.__version__)
-print("torch cuda runtime:", torch.version.cuda)
-print("cuda available:", torch.cuda.is_available())
-if torch.cuda.is_available():
-    print("device:", torch.cuda.get_device_name(0))
-    print("capability:", torch.cuda.get_device_capability(0))
-    print("arch list:", torch.cuda.get_arch_list())
-PY
-```
-
-GB10 reports compute capability `12.1` (`sm_121`). Some PyTorch or torchvision wheels may not include all kernels for this architecture. Symptoms include:
-
-```text
-CUDA error: no kernel image is available for execution on the device
-nvrtc: error: invalid value for --gpu-architecture
-```
-
-If this happens:
-
-- select `CPU` in the plugin for reliable execution
-- or install a PyTorch/torchvision/SAM3 build that includes the required GB10/SM121 CUDA kernels
-- use explicit `CUDA` only when you want to test a GPU build on that machine
-
-The plugin does not compile PyTorch, torchvision, or SAM3 CUDA extensions.
-
-## Model Setup
-
-Download or prepare a local SAM 3 checkpoint directory. The widget expects a directory, not just a single file. `~sam3/model/` is the recommended default location, but any readable directory can be used.
-
-Expected layout:
-
-```text
-~sam3/model/
-  config.json
-  processor_config.json
-  sam3.pt
-```
-
-Other supported weight names:
-
-```text
-model.safetensors
-```
-
-In the widget:
-
-1. Select the SAM 3 model directory.
-2. Click `Validate`.
-3. Choose `Device`:
-   - `Auto`: use CUDA only when the plugin considers it compatible; otherwise CPU.
-   - `CUDA`: force CUDA.
-   - `CPU`: force CPU.
-4. Optionally click `Load Image Model` or `Load 3D/Video Model`.
-
-The widget can also lazy-load the correct model when `Run Preview` is clicked.
-
-The selected model directory is remembered by the widget, so users do not need to browse to the same path every time napari starts.
-
 ## Basic Workflow
 
 1. Open an image in napari.
-2. Open `SAM3 Assistant`.
+2. Open `Plugins > SAM3 Assistant`.
 3. Select the image in `Napari Layers > Image`.
 4. Select a task.
 5. Create a prompt layer if the task needs one.
@@ -325,6 +244,8 @@ Saved output is written to:
 SAM3 saved propagated labels
 ```
 
+The current SAM 3 video predictor backend is CUDA-only. CPU mode is supported for 2D/image workflows, not 3D/video propagation.
+
 ## Channel Axis
 
 `Channel axis` tells the plugin which data axis is color/channel.
@@ -372,11 +293,48 @@ SAM3 saved propagated labels
 
 Buttons:
 
+- `Validate`: check the selected SAM 3 model directory.
+- `Load Image Model`: load the 2D/image model.
+- `Load 3D/Video Model`: load the video propagation model.
 - `Run Preview`: run the selected task.
 - `Clear Preview`: remove generated preview layers only.
 - `Save Result as Labels`: copy preview labels into saved labels.
 - `Cancel`: stop a running worker.
 - `Unload`: unload the SAM3 model from memory.
+
+## ARM64, CUDA, and DGX Spark
+
+For ARM64 systems such as NVIDIA DGX Spark / GB10:
+
+- Use Python 3.12 or newer.
+- Keep the NVIDIA driver and CUDA stack current.
+- Install a PyTorch/torchvision build that supports your GPU architecture.
+- Use `CPU` mode for reliable 2D execution if CUDA kernels are unavailable.
+- Use explicit `CUDA` only when testing a compatible GPU build.
+
+Check PyTorch GPU support:
+
+```bash
+python - <<'PY'
+import torch
+print("torch:", torch.__version__)
+print("torch cuda runtime:", torch.version.cuda)
+print("cuda available:", torch.cuda.is_available())
+if torch.cuda.is_available():
+    print("device:", torch.cuda.get_device_name(0))
+    print("capability:", torch.cuda.get_device_capability(0))
+    print("arch list:", torch.cuda.get_arch_list())
+PY
+```
+
+GB10 reports compute capability `12.1` (`sm_121`). If your PyTorch build does not include compatible kernels, you may see:
+
+```text
+CUDA error: no kernel image is available for execution on the device
+nvrtc: error: invalid value for --gpu-architecture
+```
+
+The plugin does not compile PyTorch, torchvision, or SAM 3 CUDA extensions.
 
 ## Troubleshooting
 
@@ -397,7 +355,7 @@ Error:
 CUDA error: no kernel image is available for execution on the device
 ```
 
-The GPU is visible, but at least one required CUDA kernel was not built for the device architecture. Use `CPU`, or install compatible PyTorch/torchvision/SAM3 builds.
+The GPU is visible, but at least one required CUDA kernel was not built for the device architecture. Use `CPU`, or install compatible PyTorch/torchvision/SAM 3 builds.
 
 ### Invalid GPU architecture
 
@@ -436,8 +394,8 @@ The test suite covers coordinate mapping, prompt collection, adapter utility beh
 ## References
 
 - SAM 3 repository: https://github.com/facebookresearch/sam3
+- SAM 3 model files: https://huggingface.co/facebook/sam3
 - PyTorch installation selector: https://pytorch.org/get-started/locally/
-- Hugging Face https://huggingface.co/facebook/sam3
 
 ## License
 
