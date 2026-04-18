@@ -56,7 +56,7 @@ class Sam3RepoProvider:
         if missing:
             return ProviderStatus(False, f"Missing required files: {', '.join(missing)}")
 
-        weight_candidates = ["model.safetensors", "sam3.pt", "pytorch_model.bin"]
+        weight_candidates = ["sam3.1_multiplex.pt", "model.safetensors", "sam3.pt"]
         found_weights = [name for name in weight_candidates if (path / name).exists()]
         if not found_weights:
             return ProviderStatus(

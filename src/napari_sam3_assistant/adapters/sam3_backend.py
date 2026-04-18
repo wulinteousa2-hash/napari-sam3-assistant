@@ -42,6 +42,12 @@ class Sam3Adapter:
         from sam3.model.sam3_image_processor import Sam3Processor
         from sam3.model_builder import build_sam3_image_model
 
+        if self._model_version() == "sam3.1":
+            raise RuntimeError(
+                "SAM3.1 multiplex checkpoints are supported for 3D/video propagation. "
+                "Use a SAM3 3.0 image checkpoint such as sam3.pt for 2D image tasks."
+            )
+
         device = self._resolved_device()
         kwargs = {
             "checkpoint_path": str(self.config.checkpoint_path)
@@ -64,8 +70,6 @@ class Sam3Adapter:
         )
 
     def load_video(self) -> None:
-        from sam3.model_builder import build_sam3_video_predictor
-
         device = self._resolved_device()
         if device == "cpu":
             raise RuntimeError(
@@ -81,10 +85,22 @@ class Sam3Adapter:
             "compile": self.config.compile_model,
         }
         gpu_id = self._cuda_device_index(device)
-        self.video_predictor = build_sam3_video_predictor(
-            **kwargs,
-            gpus_to_use=[gpu_id],
-        )
+        if self._model_version() == "sam3.1":
+            from sam3.model_builder import build_sam3_multiplex_video_predictor
+
+            torch.cuda.set_device(gpu_id)
+            self.video_predictor = build_sam3_multiplex_video_predictor(
+                **kwargs,
+                use_fa3=False,
+                use_rope_real=True,
+            )
+        else:
+            from sam3.model_builder import build_sam3_video_predictor
+
+            self.video_predictor = build_sam3_video_predictor(
+                **kwargs,
+                gpus_to_use=[gpu_id],
+            )
 
     def unload(self) -> None:
         self._remove_dtype_hooks()
@@ -112,8 +128,12 @@ class Sam3Adapter:
             self._normalize_state_tensors(state)
 
             if bundle.text and bundle.text.text:
-                state = self._set_text_prompt(bundle.text.text, state)
+                prompt = self._text_prompt_for_model(bundle.text.text)
+                state["_sam3_text_prompt_used"] = prompt
+                state = self._set_text_prompt(prompt, state)
                 self._normalize_state_tensors(state)
+                if bundle.task == Sam3Task.TEXT and self._mask_count(state.get("masks")) == 0:
+                    state = self._retry_text_prompt_with_lower_thresholds(prompt, state)
 
             mapper = CoordinateMapper(bundle.image)
             image_hw = rgb.shape[:2]
@@ -289,6 +309,61 @@ class Sam3Adapter:
         self._normalize_state_tensors(state)
         return self.image_processor._forward_grounding(state)
 
+    def _retry_text_prompt_with_lower_thresholds(
+        self,
+        prompt: str,
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        current = float(getattr(self.image_processor, "confidence_threshold", self.config.confidence_threshold))
+        thresholds = []
+        for threshold in (min(current, 0.35) * 0.5, 0.20, 0.10):
+            threshold = max(0.01, round(float(threshold), 3))
+            if threshold < current and threshold not in thresholds:
+                thresholds.append(threshold)
+        for threshold in thresholds:
+            state = self.image_processor.set_confidence_threshold(threshold, state)
+            state["_sam3_text_threshold_used"] = threshold
+            state["_sam3_text_prompt_used"] = prompt
+            self._normalize_state_tensors(state)
+            if self._mask_count(state.get("masks")) > 0:
+                self.image_processor.set_confidence_threshold(current)
+                return state
+        self.image_processor.set_confidence_threshold(current)
+        return state
+
+    def _text_prompt_for_model(self, prompt: str) -> str:
+        text = " ".join(prompt.strip().split())
+        lowered = text.lower()
+        prefixes = (
+            "segment all of the ",
+            "segment all the ",
+            "segment the ",
+            "segment all ",
+            "segment ",
+            "detect all of the ",
+            "detect all the ",
+            "detect the ",
+            "detect all ",
+            "detect ",
+            "find all of the ",
+            "find all the ",
+            "find the ",
+            "find all ",
+            "find ",
+        )
+        for prefix in prefixes:
+            if lowered.startswith(prefix) and len(text) > len(prefix):
+                return text[len(prefix):].strip(" .,:;")
+        return text.strip(" .,:;")
+
+    def _mask_count(self, masks: Any) -> int:
+        if masks is None:
+            return 0
+        try:
+            return len(masks)
+        except TypeError:
+            return int(np.asarray(masks).shape[0]) if np.asarray(masks).ndim else 0
+
     def _add_geometric_prompt(
         self,
         box: list[float],
@@ -351,6 +426,12 @@ class Sam3Adapter:
                 if device is not None:
                     return str(device)
         return "cuda" if torch.cuda.is_available() else "cpu"
+
+    def _model_version(self) -> str:
+        checkpoint = self.config.checkpoint_path
+        if checkpoint is not None and "sam3.1" in checkpoint.name:
+            return "sam3.1"
+        return "sam3"
 
     def _cuda_device_index(self, device: str) -> int:
         parsed = torch.device(device)
@@ -477,6 +558,13 @@ class Sam3Adapter:
             boxes_xyxy=boxes,
             scores=scores,
             object_ids=np.arange(1, len(masks) + 1) if masks is not None else None,
+            metadata={
+                "text_prompt_used": state.get("_sam3_text_prompt_used"),
+                "text_threshold_used": state.get(
+                    "_sam3_text_threshold_used",
+                    getattr(self.image_processor, "confidence_threshold", self.config.confidence_threshold),
+                ),
+            },
         )
 
     def _result_from_video_output(
@@ -495,7 +583,7 @@ class Sam3Adapter:
             task=bundle.task,
             frame_index=response.get("frame_index"),
             masks=masks,
-            labels=self._labels_from_masks(masks),
+            labels=self._labels_from_masks(masks, object_ids=object_ids),
             boxes_xyxy=boxes,
             scores=scores,
             object_ids=object_ids,
@@ -540,15 +628,26 @@ class Sam3Adapter:
         h = boxes[:, 3] * height
         return np.stack([x, y, x + w, y + h], axis=1)
 
-    def _labels_from_masks(self, masks: np.ndarray | None) -> np.ndarray | None:
+    def _labels_from_masks(
+        self,
+        masks: np.ndarray | None,
+        *,
+        object_ids: np.ndarray | None = None,
+    ) -> np.ndarray | None:
         if masks is None:
             return None
         masks = np.asarray(masks)
+        if masks.ndim == 4 and masks.shape[1] == 1:
+            masks = masks[:, 0]
         if masks.ndim == 2:
             return masks.astype(np.uint8)
+        ids = None
+        if object_ids is not None:
+            ids = np.asarray(object_ids).reshape(-1)
         labels = np.zeros(masks.shape[-2:], dtype=np.uint32)
         for idx, mask in enumerate(masks, start=1):
-            labels[np.asarray(mask).astype(bool)] = idx
+            label_value = int(ids[idx - 1]) if ids is not None and idx - 1 < len(ids) else idx
+            labels[np.asarray(mask).astype(bool)] = label_value
         return labels
 
     def _to_numpy(self, value: Any) -> np.ndarray | None:

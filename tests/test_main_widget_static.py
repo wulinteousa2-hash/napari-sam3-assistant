@@ -14,12 +14,45 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     assert "3. Layers" in source
     assert "4. Prompt Tools" in source
     assert "5. Run" in source
+    assert "6. Results" in source
+    assert "Step 7. Status" in source
+    assert "collapsibleStepBadge" in source
+    assert "activityIndicator" in source
+    assert "Activity: SAM3 preview running..." in source
+    assert "Frame" in source
+    assert "Layer" in source
+    assert "Prompt" in source
+    assert "Object ID" in source
+    assert "Score" in source
+    assert "Area" in source
+    assert "Detection threshold" in source
+    assert "Type text prompt, then press Enter to run..." in source
+    assert "textPromptInput" in source
+    assert "returnPressed.connect(self._run_current_task)" in source
+    assert "Text prompt returned zero objects" in source
+    assert "Copy Clipboard" in source
+    assert "Export CSV" in source
+    assert "Relabel layer" in source
+    assert "Values to replace" in source
+    assert "Merge Label Values" in source
+    assert "Model type" in source
+    assert "SAM3.0 2D/3D/video" in source
+    assert "SAM3.1 video multiplex" in source
+    assert "SAM3.1 video multiplex supports 3D/video propagation" in source
     assert "Load 2D Model" in source
     assert "Load 3D/Video Model" in source
+    assert "Batch all image layers" in source
+    assert "Batch text prompts" in source
+    assert "multiTextPromptInput" in source
+    assert "Running {len(bundles)} batch job(s)" in source
+    assert "SAM3 preview labels [" in source
+    assert "Saved {saved} batch label layer(s)." in source
     assert "Create Prompt Layer" in source
     assert "Clear Preview" in source
     assert "Save Result as Labels" in source
-    assert "Apply Positive/Negative to Selected Points" in source
+    assert "Apply mode to selected points" in source
+    assert "Add the first point to start live refinement; first run may load the model." in source
+    assert "T = next point mode only. Shift+T = flip selected/latest point and rerun." in source
 
 
 def test_widget_does_not_expose_dummy_mask_debug_action():

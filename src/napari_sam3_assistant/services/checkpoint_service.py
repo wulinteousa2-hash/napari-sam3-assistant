@@ -21,12 +21,22 @@ class CheckpointService:
     ]
 
     OPTIONAL_WEIGHT_FILES = [
+        "sam3.1_multiplex.pt",
         "model.safetensors",
         "sam3.pt",
-        "pytorch_model.bin",
     ]
 
-    def validate(self, model_dir: str) -> CheckpointValidationResult:
+    WEIGHT_FILES_BY_MODEL_TYPE = {
+        "sam3": ["sam3.pt", "model.safetensors"],
+        "sam3.1": ["sam3.1_multiplex.pt"],
+    }
+
+    def validate(
+        self,
+        model_dir: str,
+        *,
+        model_type: str | None = None,
+    ) -> CheckpointValidationResult:
         path = Path(model_dir)
 
         if not model_dir.strip():
@@ -45,11 +55,16 @@ class CheckpointService:
                 f"Missing required config files: {', '.join(missing)}",
             )
 
-        if not any((path / name).exists() for name in self.OPTIONAL_WEIGHT_FILES):
+        expected_weights = (
+            self.WEIGHT_FILES_BY_MODEL_TYPE.get(model_type, self.OPTIONAL_WEIGHT_FILES)
+            if model_type
+            else self.OPTIONAL_WEIGHT_FILES
+        )
+        if not any((path / name).exists() for name in expected_weights):
             return CheckpointValidationResult(
                 False,
                 "No weight file found. Expected one of: "
-                + ", ".join(self.OPTIONAL_WEIGHT_FILES),
+                + ", ".join(expected_weights),
             )
 
-        return CheckpointValidationResult(True, "Checkpoint directory looks valid.")
+        return CheckpointValidationResult(True, "Model directory looks valid.")
