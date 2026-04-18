@@ -1,6 +1,8 @@
 
 # napari-sam3-assistant
 ![napari-sam3-assistant UI](docs/ui.png)
+
+
 `napari-sam3-assistant` is a napari plugin for interactive Segment Anything Model 3 (SAM3) segmentation using text, points, boxes, exemplar prompts, point-based refinement, and 3D/video-like propagation.
 
 The plugin focuses on task-based segmentation workflows:
