@@ -403,6 +403,9 @@ The test suite covers coordinate mapping, prompt collection, adapter utility beh
 - SAM 3 model files: https://huggingface.co/facebook/sam3
 - PyTorch installation selector: https://pytorch.org/get-started/locally/
 
+## Acknowledgement
+The demo image was provided by the Electron Microscopy Core Facility at Houston Methodist Research Institute
+
 ## License
 
 MIT. See the project license file.
