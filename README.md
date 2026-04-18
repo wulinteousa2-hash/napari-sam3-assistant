@@ -93,11 +93,14 @@ Expected model directory:
 
 Keep all downloaded model files together in one directory. In the plugin widget, click `Browse`, select that directory, then click `Validate`.
 
-Do not put downloaded weights inside the SAM 3 Python source package, for example `sam3/sam3/model`. If you want a project-local model folder, use a separate directory such as:
+For this project, a local folder such as the following is acceptable:
 
 ```text
 ~/Projects/napari/sam3/model
 ```
+Note that the upstream SAM 3 source repository does not ship with a model/ folder by default. In this project, sam3/model is a user-created local directory used to store downloaded SAM 3 weights and configuration files.
+
+If you created sam3/model yourself and placed the downloaded Hugging Face files there, that is a valid setup. The important requirement is simply that all required SAM 3 files stay together in one readable directory and that you select that directory in the widget.
 
 The selected model directory is remembered by the widget.
 
