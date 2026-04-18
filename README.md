@@ -67,16 +67,18 @@ This plugin does not ship with SAM 3 weights or model configuration files. Downl
 https://huggingface.co/facebook/sam3
 ```
 
-The repository is gated. Sign in to Hugging Face, open `facebook/sam3`, accept or request access, then download the files from the repository.
+The repository is gated.
 
-Recommended download method:
+1. Sign in to your Hugging Face account.
+2. Open the facebook/sam3 model page.
+3. Request or accept access to the repository.
+4. Once access is approved, open the Files and versions tab.
+5. Download the required model and configuration files directly from the website.
 
-```bash
-pip install -U huggingface_hub
-hf auth login
-mkdir -p ~/models/sam3
-hf download facebook/sam3 --local-dir ~/models/sam3
-```
+A reference screenshot of the file list is shown below:
+
+![SAM 3 model files screenshot](docs/sam3_model_files.png)
+
 
 Expected model directory:
 
