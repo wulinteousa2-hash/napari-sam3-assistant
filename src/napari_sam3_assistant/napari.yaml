@@ -1,11 +1,16 @@
 name: napari-sam3-assistant
 display_name: SAM3 Assistant
+description: A napari plugin for interactive SAM3 segmentation with text, points, boxes, exemplar prompts, refinement, and 3D/video-like propagation.
 schema_version: 0.2.1
+
+visibility: public
+categories:
+  - Utilities
 
 contributions:
   commands:
     - id: napari-sam3-assistant.make_widget
-      title: Create SAM3 Assistant
+      title: SAM3 Assistant
       python_name: napari_sam3_assistant.widgets.main_widget:MainWidget
 
   widgets:
