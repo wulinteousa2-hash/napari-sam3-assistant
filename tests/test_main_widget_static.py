@@ -9,11 +9,17 @@ WIDGET_SOURCE = Path("src/napari_sam3_assistant/widgets/main_widget.py")
 def test_widget_uses_clear_model_and_prompt_action_labels():
     source = WIDGET_SOURCE.read_text(encoding="utf-8")
 
-    assert "Load Image Model" in source
+    assert "1. Model Setup" in source
+    assert "2. Task" in source
+    assert "3. Layers" in source
+    assert "4. Prompt Tools" in source
+    assert "5. Run" in source
+    assert "Load 2D Model" in source
     assert "Load 3D/Video Model" in source
     assert "Create Prompt Layer" in source
     assert "Clear Preview" in source
     assert "Save Result as Labels" in source
+    assert "Apply Positive/Negative to Selected Points" in source
 
 
 def test_widget_does_not_expose_dummy_mask_debug_action():

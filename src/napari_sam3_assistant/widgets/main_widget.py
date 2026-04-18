@@ -42,6 +42,105 @@ PROMPT_BOX = "box"
 PROMPT_LABELS = "labels"
 PROMPT_TEXT = "text"
 
+SAM3_WIDGET_STYLE = """
+MainWidget {
+    background: #111827;
+    color: #e5e7eb;
+}
+QGroupBox {
+    background: #172033;
+    border: 1px solid #314158;
+    border-radius: 10px;
+    margin-top: 14px;
+    padding: 12px 10px 10px 10px;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 12px;
+    padding: 2px 8px;
+    color: #67e8f9;
+    background: #111827;
+    border-radius: 6px;
+}
+QLabel {
+    color: #d1d5db;
+}
+QLineEdit, QTextEdit, QComboBox, QSpinBox {
+    background: #0b1220;
+    color: #f8fafc;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    padding: 5px 7px;
+    selection-background-color: #0ea5e9;
+}
+QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QSpinBox:focus {
+    border: 1px solid #38bdf8;
+}
+QPushButton {
+    background: #26364f;
+    color: #f8fafc;
+    border: 1px solid #3b516f;
+    border-radius: 7px;
+    padding: 6px 10px;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background: #314563;
+    border-color: #60a5fa;
+}
+QPushButton:pressed {
+    background: #1d4ed8;
+}
+QPushButton:disabled {
+    background: #1f2937;
+    color: #6b7280;
+    border-color: #374151;
+}
+QPushButton#runButton {
+    background: #0369a1;
+    border-color: #38bdf8;
+}
+QPushButton#runButton:hover {
+    background: #0284c7;
+}
+QPushButton#saveButton {
+    background: #166534;
+    border-color: #22c55e;
+}
+QPushButton#saveButton:hover {
+    background: #15803d;
+}
+QPushButton#clearButton {
+    background: #854d0e;
+    border-color: #f59e0b;
+}
+QPushButton#clearButton:hover {
+    background: #a16207;
+}
+QPushButton#cancelButton {
+    background: #7f1d1d;
+    border-color: #ef4444;
+}
+QPushButton#cancelButton:hover {
+    background: #991b1b;
+}
+QCheckBox {
+    color: #d1d5db;
+    spacing: 8px;
+}
+QTextEdit#statusBox {
+    background: #07111f;
+    color: #bae6fd;
+    border: 1px solid #164e63;
+    border-radius: 8px;
+    font-family: "DejaVu Sans Mono", "Menlo", monospace;
+}
+QLabel#statusLabel {
+    color: #93c5fd;
+    font-weight: 700;
+}
+"""
+
 
 class MainWidget(QWidget):
     def __init__(
@@ -72,6 +171,7 @@ class MainWidget(QWidget):
         self._on_task_changed()
 
     def _build_ui(self) -> None:
+        self.setStyleSheet(SAM3_WIDGET_STYLE)
         layout = QVBoxLayout()
 
         layout.addWidget(self._build_backend_group())
@@ -81,16 +181,27 @@ class MainWidget(QWidget):
         layout.addWidget(self._build_actions_group())
 
         self.status_box = QTextEdit()
+        self.status_box.setObjectName("statusBox")
         self.status_box.setReadOnly(True)
         self.status_box.setMinimumHeight(150)
-        layout.addWidget(QLabel("Status"))
+        status_label = QLabel("Status")
+        status_label.setObjectName("statusLabel")
+        layout.addWidget(status_label)
         layout.addWidget(self.status_box)
 
         self.setLayout(layout)
         self._log("SAM3 Assistant widget initialized.")
 
+    def _step_group(self, title: str) -> QGroupBox:
+        group = QGroupBox(title)
+        font = group.font()
+        font.setPointSize(max(font.pointSize() + 1, 11))
+        font.setBold(True)
+        group.setFont(font)
+        return group
+
     def _build_backend_group(self) -> QGroupBox:
-        group = QGroupBox("Backend / Model Setup")
+        group = self._step_group("1. Model Setup")
         layout = QVBoxLayout()
 
         row = QHBoxLayout()
@@ -105,7 +216,7 @@ class MainWidget(QWidget):
         validate_btn = QPushButton("Validate")
         validate_btn.clicked.connect(self._validate_model_dir)
 
-        load_image_btn = QPushButton("Load Image Model")
+        load_image_btn = QPushButton("Load 2D Model")
         load_image_btn.clicked.connect(self._load_image_adapter)
 
         load_video_btn = QPushButton("Load 3D/Video Model")
@@ -113,13 +224,14 @@ class MainWidget(QWidget):
 
         unload_btn = QPushButton("Unload")
         unload_btn.clicked.connect(self._unload_adapter)
+        unload_btn.setObjectName("clearButton")
 
         btn_row.addWidget(validate_btn)
         btn_row.addWidget(load_image_btn)
         btn_row.addWidget(load_video_btn)
         btn_row.addWidget(unload_btn)
 
-        self.lazy_load_check = QCheckBox("Lazy-load on run")
+        self.lazy_load_check = QCheckBox("Load model when running")
         self.lazy_load_check.setChecked(True)
 
         self.device_combo = QComboBox()
@@ -137,7 +249,7 @@ class MainWidget(QWidget):
         return group
 
     def _build_task_group(self) -> QGroupBox:
-        group = QGroupBox("Task")
+        group = self._step_group("2. Task")
         layout = QFormLayout()
 
         self.task_combo = QComboBox()
@@ -160,17 +272,17 @@ class MainWidget(QWidget):
         self.propagation_direction_combo = QComboBox()
         self.propagation_direction_combo.addItems(["both", "forward", "backward"])
 
-        layout.addRow("Mode", self.task_combo)
+        layout.addRow("Task", self.task_combo)
         layout.addRow("Channel axis (-1 auto/no channel)", self.channel_axis_spin)
         hint = QLabel("Leave -1 unless your image has an explicit channel dimension.")
         hint.setToolTip(channel_axis_tip)
         layout.addRow("", hint)
-        layout.addRow("Propagation", self.propagation_direction_combo)
+        layout.addRow("3D direction", self.propagation_direction_combo)
         group.setLayout(layout)
         return group
 
     def _build_layers_group(self) -> QGroupBox:
-        group = QGroupBox("Napari Layers")
+        group = self._step_group("3. Layers")
         layout = QFormLayout()
 
         self.image_layer_combo = QComboBox()
@@ -190,11 +302,11 @@ class MainWidget(QWidget):
         return group
 
     def _build_prompt_group(self) -> QGroupBox:
-        group = QGroupBox("Prompt Tools")
+        group = self._step_group("4. Prompt Tools")
         layout = QFormLayout()
 
         self.prompt_tool_combo = QComboBox()
-        self.prompt_tool_combo.addItem("Points (+/-)", PROMPT_POINTS)
+        self.prompt_tool_combo.addItem("Points (positive/negative)", PROMPT_POINTS)
         self.prompt_tool_combo.addItem("Box", PROMPT_BOX)
         self.prompt_tool_combo.addItem("Labels mask", PROMPT_LABELS)
         self.prompt_tool_combo.addItem("Text only", PROMPT_TEXT)
@@ -208,7 +320,7 @@ class MainWidget(QWidget):
         init_prompt_btn = QPushButton("Create Prompt Layer")
         init_prompt_btn.clicked.connect(self._initialize_prompt_layer)
 
-        apply_polarity_btn = QPushButton("Apply Polarity to Selected Points")
+        apply_polarity_btn = QPushButton("Apply Positive/Negative to Selected Points")
         apply_polarity_btn.clicked.connect(self._apply_polarity_to_selected_points)
 
         self.text_prompt_edit = QLineEdit()
@@ -218,8 +330,8 @@ class MainWidget(QWidget):
         clear_btn = QPushButton("Clear Text / Prompt State")
         clear_btn.clicked.connect(self._clear_prompts)
 
-        layout.addRow("Tool", self.prompt_tool_combo)
-        layout.addRow("Point polarity", self.point_polarity_combo)
+        layout.addRow("Prompt type", self.prompt_tool_combo)
+        layout.addRow("Point type", self.point_polarity_combo)
         layout.addRow(init_prompt_btn)
         layout.addRow(apply_polarity_btn)
         layout.addRow("Text", self.text_prompt_edit)
@@ -228,23 +340,28 @@ class MainWidget(QWidget):
         return group
 
     def _build_actions_group(self) -> QGroupBox:
-        group = QGroupBox("Run")
+        group = self._step_group("5. Run")
         layout = QVBoxLayout()
 
         row = QHBoxLayout()
         self.run_btn = QPushButton("Run Preview")
+        self.run_btn.setObjectName("runButton")
         self.run_btn.clicked.connect(self._run_current_task)
 
         self.propagate_btn = QPushButton("Propagate Stack/Video")
+        self.propagate_btn.setObjectName("runButton")
         self.propagate_btn.clicked.connect(self._propagate_existing_session)
 
         cancel_btn = QPushButton("Cancel")
+        cancel_btn.setObjectName("cancelButton")
         cancel_btn.clicked.connect(self._cancel_worker)
 
         save_btn = QPushButton("Save Result as Labels")
+        save_btn.setObjectName("saveButton")
         save_btn.clicked.connect(self._save_preview_labels)
 
         clear_preview_btn = QPushButton("Clear Preview")
+        clear_preview_btn.setObjectName("clearButton")
         clear_preview_btn.clicked.connect(self._clear_preview_layers)
 
         row.addWidget(self.run_btn)
@@ -714,7 +831,7 @@ class MainWidget(QWidget):
             return
         selected = sorted(getattr(layer, "selected_data", []))
         if not selected:
-            self._log("Select one or more points before applying polarity.")
+            self._log("Select one or more points before applying the positive/negative type.")
             return
 
         polarity = self.point_polarity_combo.currentData() or "positive"
@@ -727,7 +844,7 @@ class MainWidget(QWidget):
         properties["polarity"] = np.asarray(values, dtype=object)
         layer.properties = properties
         layer.refresh_colors()
-        self._log(f"Applied {polarity} polarity to {len(selected)} point(s).")
+        self._log(f"Set {len(selected)} selected point(s) to {polarity}.")
 
     def _task_guidance(self, task: Sam3Task) -> str:
         if task == Sam3Task.TEXT:
