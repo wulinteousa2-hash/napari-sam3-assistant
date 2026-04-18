@@ -1,6 +1,6 @@
 # napari-sam3-assistant
 
-`napari-sam3-assistant` is a napari widget for running Meta SAM 3 segmentation workflows from napari image, points, shapes, labels, and text inputs.
+`napari-sam3-assistant` is a napari plugin for interactive SAM3 segmentation with text, points, boxes, exemplar prompts, point-based refinement, and 3D/video-like propagation.
 
 The plugin focuses on task-based segmentation workflows:
 
