@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+.venv/
+.env/
+.pytest_cache/
+.coverage
+dist/
+build/
+*.egg-info/
+
+# local model assets
+model/
+models/
+*.pt
+*.pth
+*.bin
+*.safetensors

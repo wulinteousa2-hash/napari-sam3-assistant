@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "napari-sam3-assistant"
+version = "0.0.1"
+description = "A napari plugin for SAM3 text, box, exemplar, refinement, and video-like segmentation workflows."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [
+  { name = "Wulin Teo" }
+]
+dependencies = [
+  "napari>=0.5.0",
+  "qtpy",
+  "numpy",
+  "pillow",
+]
+keywords = ["napari", "SAM3", "segmentation", "tracking", "microscopy", "image analysis"]
+classifiers = [
+  "Framework :: napari",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Image Processing",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.entry-points."napari.manifest"]
+napari-sam3-assistant = "napari_sam3_assistant:napari.yaml"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.package-data]
+napari_sam3_assistant = ["napari.yaml"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
