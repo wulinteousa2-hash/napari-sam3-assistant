@@ -3,7 +3,7 @@
 ![napari-sam3-assistant UI](docs/ui.png)
 
 
-`napari-sam3-assistant` is a napari plugin for interactive Segment Anything Model 3 (SAM3) segmentation using text, points, boxes, exemplar prompts, point-based refinement, and 3D/video-like propagation.
+`napari-sam3-assistant` is a napari plugin for interactive Segment Anything Model 3 (SAM3) segmentation using text, points, boxes, exemplar prompts, large-image ROI inference, point-based refinement, mask operations, and 3D/video-like propagation.
 
 The plugin focuses on task-based segmentation workflows:
 
@@ -11,19 +11,21 @@ The plugin focuses on task-based segmentation workflows:
 - 3D stack / video-like propagation from prompts on a selected slice or frame
 - exemplar segmentation from Shapes ROI boxes
 - text-based concept segmentation
+- large OME-Zarr and TIFF segmentation through local ROI inference
 - refinement with positive and negative point prompts
+- downstream mask cleanup, merge, and export operations
 
 SAM 3 is not bundled with this plugin. Install the SAM 3 backend and download the SAM 3 model files separately from Meta's Hugging Face repository.
 
 ## Status
 
-This project is under active development. The current widget supports local SAM 3 model loading, napari prompt collection, background execution, and writing results back to napari layers.
+This project is under active development. The current widget supports local SAM 3 model loading, napari prompt collection, large-image ROI execution, downstream mask operations, background execution, and writing results back to napari layers.
 
 ## Changelog
 
-### 2.0.0
+### 3.0.0
 
-Major update focused on SAM3.1 support, clearer model selection, live refinement, and result handling.
+Major update compared with 2.0.0, focused on large-image segmentation, mask operations, SAM3.1 support, clearer model selection, live refinement, bug fixes, and result handling.
 
 Added:
 
@@ -41,6 +43,16 @@ Added:
 - Compact activity indicator in `Run` showing model execution, propagation, refinement, idle, and failure states.
 - Results table showing `Layer`, `Prompt`, `Frame`, `Object ID`, `Score`, and `Area`.
 - Detection threshold control for SAM3 grounding, useful when text prompts return no candidates.
+- Optional large-image local inference mode for OME-Zarr, large TIFF, and similar very large images, including images on the order of `60000 x 50000` pixels when the data source can provide lazy ROI reads.
+- Local ROI inference with selectable ROI sizes from `512 x 512` through `8192 x 8192`.
+- Active ROI overlay layer showing the current SAM3 local inference window in global image coordinates.
+- Step 7 `Mask Operations` workflow for accepting, cleaning, merging, and exporting segmentation masks.
+- Accepted-object saving with object name, class name, class value, append, and replace modes.
+- Class-level merge workflow for accepted object layers.
+- Mask cleanup tools for connected-component analysis, deleting selected components, removing small objects, filling holes, smoothing masks, keeping the largest object, and relabeling values.
+- Final merge/export tools for semantic, instance, and binary output masks.
+- Overlap handling during final mask merge with priority, selection-order, component-size, and background rules.
+- Mask export to TIFF, PNG, and NumPy `.npy`.
 - More visible text prompt input with `Enter` bound to `Run Preview`.
 - Text prompt cleanup that sends short model-facing phrases such as `myelin ring` instead of instruction text such as `segment all the myelin ring`.
 - Automatic lower-threshold retry for text segmentation when the first pass returns zero objects.
@@ -78,6 +90,7 @@ Changed:
 - Text prompt submission can be run with `Enter` without moving to the `Run Preview` button.
 - Preview clearing removes generated preview layers only and keeps prompts, saved labels, and loaded models.
 - `pytorch_model.bin` was removed from documented and validated model-file names.
+- Large-image ROI choices now include `4096 x 4096` and `8192 x 8192`.
 
 Current model support:
 
@@ -119,70 +132,77 @@ Added:
   - `processor_config.json`
   - one weight file such as `sam3.pt`, `model.safetensors`, or `sam3.1_multiplex.pt`
 
-GPU use requires a PyTorch / torchvision / SAM 3 stack that is compatible with your GPU architecture. If CUDA kernels are not available for the device, select **CPU** in the widget.
+If CUDA is not available or not compatible, select **CPU** in the widget.
 
 ## Setup
 
-Setup has three parts:
+### Important for Windows users
 
-1. Install the SAM 3 backend.
-2. Download the SAM 3 model files from Hugging Face and configure the model path.
-3. Install this napari plugin.
+If you installed the standalone napari desktop app from the website, Plugin Manager may not work for this plugin because that app uses a different Python environment.
 
-### 1. Install SAM 3
+For Windows, use a **new Conda environment with Python 3.12** and install napari, SAM 3, and `napari-sam3-assistant` there.
 
-Create and activate an environment:
+## Windows install in PowerShell
 
-```bash
-conda create -n napari-sam3 python=3.12
+```powershell
+# 1) install Miniforge first from:
+# https://conda-forge.org/download/
+
+# 2) open Miniforge Prompt or PowerShell after Miniforge is installed
+
+
+conda create -n napari-sam3 python=3.12 -y
 conda activate napari-sam3
+
+python -m pip install --upgrade pip wheel
+python -m pip install "setuptools<82"
+python -m pip install "napari[all]"
+
+# choose one:
+python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+# or
+python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+python -m pip install --no-cache-dir sam3
+python -m pip install einops triton-windows pycocotools
+python -m pip install napari-sam3-assistant
+
+napari
 ```
 
-Install PyTorch and torchvision for your platform. Use the official PyTorch selector for the current command:
+## Download SAM 3 model files
 
-```bash
-pip install torch torchvision
-```
+Download the model files from:
 
-Install SAM 3:
+- `https://huggingface.co/facebook/sam3`
+- `https://huggingface.co/facebook/sam3.1`
 
-```bash
-git clone https://github.com/facebookresearch/sam3.git
-cd sam3
-pip install -e .
-```
+These repositories are gated, so you must request or accept access first.
 
-### 2. Download SAM 3 Weights
-
-This plugin does not ship with SAM 3 weights or model configuration files. Download them from the official Hugging Face repository:
-
-```text
-https://huggingface.co/facebook/sam3
-```
-
-SAM3.1 multiplex weights are available from:
-
-```text
-https://huggingface.co/facebook/sam3.1
-```
-
-These repositories are gated.
-
-1. Sign in to your Hugging Face account.
-2. Open the facebook/sam3 model page.
-3. Request or accept access to the repository.
-4. Once access is approved, open the Files and versions tab.
-5. Download the required model and configuration files directly from the website.
+After approval, download the files manually from the **Files and versions** tab.
 
 A reference screenshot of the file list is shown below:
 
 ![SAM 3 model files screenshot](docs/sam3_model_files.png)
 
+## Model folder
 
-Expected model directory:
+The model files can be stored in any folder you want.
+
+Examples:
 
 ```text
-~/models/sam3/
+D:\models\sam3
+D:\models\sam3_1
+
+```
+
+The plugin only needs the correct folder path.
+
+Example SAM3.0 folder:
+
+```text
+D:\models\sam3\
   config.json
   processor_config.json
   sam3.pt
@@ -190,56 +210,39 @@ Expected model directory:
 
 `model.safetensors` is also supported as a SAM3 3.0 weight file.
 
-For SAM3.1 video multiplex, use:
+Example SAM3.1 folder:
 
 ```text
-~/models/sam3.1/
+D:\models\sam3_1\
   config.json
   processor_config.json
   sam3.1_multiplex.pt
 ```
 
-Depending on the Hugging Face layout, the directory may also contain tokenizer files such as `tokenizer.json`, `vocab.json`, and `merges.txt`.
-
 Current model support:
 
-- SAM3 3.0 weights: 2D image tasks and 3D/video propagation.
-- SAM3.1 `sam3.1_multiplex.pt`: 3D/video propagation through the SAM3.1 multiplex video predictor.
-- SAM3.1 is not currently routed through the plugin's 2D image model loader.
+- SAM3.0 weights: 2D image tasks and 3D/video propagation
+- SAM3.1 `sam3.1_multiplex.pt`: 3D/video propagation through the SAM3.1 multiplex video predictor
+- SAM3.1 is not currently routed through the plugin's 2D image model loader
 
-Keep each model version in its own directory. In the plugin widget, first choose `Model type`, then click `Browse`, select the matching directory, and click `Validate`.
 
-Example local folders:
+## Device rule
 
-```text
-~/Projects/napari/sam3/model     -> choose SAM3.0 2D/3D/video
-~/Projects/napari/sam3/model3_1  -> choose SAM3.1 video multiplex
-```
+- If you installed CPU-only PyTorch, choose **CPU**
+- If you installed CUDA PyTorch and `torch.cuda.is_available()` is `True`, you may choose **CUDA**
 
-Note that the upstream SAM 3 source repository does not ship with a `model/` folder by default. In this project, `sam3/model` and `sam3/model3_1` are user-created local directories used to store downloaded SAM 3 weights and configuration files.
+## For developers
 
-The selected model type, model directory, and device are remembered by the widget.
+If you want editable installs and `git pull`, use:
 
-### 3. Install napari-sam3-assistant
+```powershell
+git clone https://github.com/facebookresearch/sam3.git
+cd sam3
+python -m pip install --no-cache-dir -e .
 
-Install this plugin:
-
-```bash
-git clone https://github.com/wulinteousa2-hash/napari-sam3-assistant
+git clone https://github.com/wulinteousa2-hash/napari-sam3-assistant.git
 cd napari-sam3-assistant
-pip install -e .
-```
-
-Start napari:
-
-```bash
-napari
-```
-
-Open the widget from:
-
-```text
-Plugins > SAM3 Assistant
+python -m pip install -e .
 ```
 
 ## Basic Workflow
@@ -254,6 +257,54 @@ Plugins > SAM3 Assistant
 8. Click `Save Result as Labels` to keep the result.
 
 Use `Clear Preview` to remove generated preview layers without deleting prompts or saved labels.
+
+### Large-Image Local Inference
+
+Large-image mode is optional and off by default. When it is off, the plugin keeps the existing full-image inference path.
+
+Use this mode for OME-Zarr, large TIFF, and similar large images where sending the full selected plane to SAM3 is too expensive.
+
+Workflow:
+
+1. Set up the normal task and prompt type.
+2. Enable `Enable large-image local inference` in `Step 2. Task`.
+3. Choose a local ROI size:
+
+```text
+512 x 512
+1024 x 1024
+2048 x 2048
+4096 x 4096
+8192 x 8192
+```
+
+4. Add a point or box prompt.
+5. Click `Run Preview`, or add points in live refinement mode.
+
+ROI behavior:
+
+- Point prompts use the latest point as the ROI anchor.
+- Box prompts use the box center and keep the box inside the local inference window when possible.
+- Refinement uses the latest point as the ROI anchor.
+- Text-only prompts keep the full-image path in this first pass unless a point or box anchor is also available.
+- If a new point or box stays inside the current ROI, the same ROI is reused.
+- If a new point or box falls outside the current ROI, the ROI is rebuilt around the new prompt.
+
+The active ROI is shown as:
+
+```text
+SAM3 active ROI
+```
+
+SAM3 receives only the local ROI image data. Returned labels and boxes are written back into global image coordinates in the normal preview layers.
+
+Status messages report:
+
+```text
+Large-image mode OFF: full-image inference.
+Large-image mode ON: local ROI inference (WIDTH x HEIGHT).
+Active ROI bounds: y=Y0:Y1, x=X0:X1.
+```
 
 ### Batch Multiple 2D Images
 
@@ -511,6 +562,19 @@ New value: 3
 ```
 
 Then click `Merge Label Values`. The selected Labels layer is updated in place.
+
+## Step 7 Mask Operations
+
+Step 7 provides downstream mask operations for turning SAM3 previews into curated masks for analysis or training data.
+
+Tabs:
+
+- `Accepted Objects`: save a preview Labels layer as a named accepted object with class metadata, append it to an existing accepted layer, or replace an existing accepted layer.
+- `Class Merge`: merge selected accepted-object layers into a class working mask.
+- `Mask Cleanup`: analyze connected components, delete selected components, remove small objects, fill holes, smooth masks, keep the largest component, and relabel values.
+- `Final Merge / Export`: merge cleaned class masks into semantic, instance, or binary final masks, choose overlap handling, and export TIFF, PNG, or NumPy `.npy` files.
+
+The mask operations panel works on napari Labels layers, including SAM3 preview and saved label layers.
 
 ## ARM64, CUDA, and DGX Spark
 

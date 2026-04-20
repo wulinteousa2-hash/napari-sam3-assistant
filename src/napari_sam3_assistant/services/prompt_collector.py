@@ -4,7 +4,7 @@ from typing import Any
 
 import numpy as np
 
-from ..core.coordinates import extract_2d_image, infer_image_selection
+from ..core.coordinates import base_image_data, extract_2d_image, infer_image_selection
 from ..core.models import (
     BoxPrompt,
     ExemplarPrompt,
@@ -35,11 +35,13 @@ class PromptCollector:
         labels_layer_name: str | None = None,
         text: str = "",
         channel_axis: int | None = None,
+        collect_exemplar_rois: bool = True,
     ) -> PromptBundle:
         image_layer = viewer.layers[image_layer_name]
+        image_data = base_image_data(image_layer.data)
         selection = infer_image_selection(
             layer_name=image_layer.name,
-            data_shape=tuple(image_layer.data.shape),
+            data_shape=tuple(np.asarray(image_data).shape),
             dims_current_step=tuple(viewer.dims.current_step),
             channel_axis=channel_axis,
         )
@@ -55,9 +57,10 @@ class PromptCollector:
         if shapes_layer_name:
             boxes, exemplars = self._collect_shapes(
                 viewer.layers[shapes_layer_name],
-                image_layer.data,
+                image_data,
                 selection.frame_index,
                 task,
+                collect_exemplar_rois=collect_exemplar_rois,
             )
             bundle.boxes.extend(boxes)
             bundle.exemplars.extend(exemplars)
@@ -88,6 +91,8 @@ class PromptCollector:
         image_data: np.ndarray,
         frame_index: int | None,
         task: Sam3Task,
+        *,
+        collect_exemplar_rois: bool = True,
     ) -> tuple[list[BoxPrompt], list[ExemplarPrompt]]:
         boxes: list[BoxPrompt] = []
         exemplars: list[ExemplarPrompt] = []
@@ -109,6 +114,8 @@ class PromptCollector:
             if task == Sam3Task.EXEMPLAR:
                 # Local SAM3 exposes exemplar/visual prompting as positive boxes.
                 boxes.append(box)
+                if not collect_exemplar_rois:
+                    continue
                 roi = self._crop_exemplar(image_data, y0, x0, y1, x1)
                 exemplars.append(
                     ExemplarPrompt(
@@ -175,8 +182,9 @@ class PromptCollector:
         y1: float,
         x1: float,
     ) -> np.ndarray:
-        selection = infer_image_selection("exemplar-source", tuple(np.asarray(image_data).shape))
-        image = extract_2d_image(np.asarray(image_data), selection)
+        normalized = base_image_data(image_data)
+        selection = infer_image_selection("exemplar-source", tuple(np.asarray(normalized).shape))
+        image = extract_2d_image(normalized, selection)
         height, width = image.shape[-2:]
         iy0 = max(0, min(height, int(np.floor(y0))))
         iy1 = max(iy0 + 1, min(height, int(np.ceil(y1))))

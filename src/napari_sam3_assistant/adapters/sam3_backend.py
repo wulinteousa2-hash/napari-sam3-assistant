@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from dataclasses import dataclass
+import copy
+import hashlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Iterator
@@ -34,6 +36,8 @@ class Sam3Adapter:
         self.image_processor: Any | None = None
         self.video_predictor: Any | None = None
         self.image_state: dict[str, Any] | None = None
+        self._cached_image_state: dict[str, Any] | None = None
+        self._cached_image_key: tuple[Any, ...] | None = None
         self.video_session: Sam3Session | None = None
         self._temp_video_dir: TemporaryDirectory[str] | None = None
         self._dtype_hook_handles: list[Any] = []
@@ -60,6 +64,8 @@ class Sam3Adapter:
             "device": device,
         }
         self.image_model = build_sam3_image_model(**kwargs)
+        self._cached_image_state = None
+        self._cached_image_key = None
         if device == "cpu":
             self._force_float32(self.image_model)
             self._install_cpu_float32_hooks(self.image_model)
@@ -107,13 +113,21 @@ class Sam3Adapter:
         self.image_model = None
         self.image_processor = None
         self.image_state = None
+        self._cached_image_state = None
+        self._cached_image_key = None
         self.video_predictor = None
         self.video_session = None
         if self._temp_video_dir is not None:
             self._temp_video_dir.cleanup()
             self._temp_video_dir = None
 
-    def run_image(self, image_data: np.ndarray, bundle: PromptBundle) -> Sam3Result:
+    def run_image(
+        self,
+        image_data: np.ndarray,
+        bundle: PromptBundle,
+        *,
+        cache_context: dict[str, Any] | None = None,
+    ) -> Sam3Result:
         needs_interactivity = bool(bundle.points or bundle.masks)
         if self.image_processor is None:
             self.load_image(enable_instance_interactivity=needs_interactivity)
@@ -122,11 +136,8 @@ class Sam3Adapter:
 
         frame = extract_2d_image(image_data, bundle.image)
         rgb = to_rgb_uint8(frame)
-        pil_image = Image.fromarray(rgb)
+        state = self._initial_state_for_image(rgb, bundle, cache_context=cache_context)
         with self._inference_context():
-            state = self.image_processor.set_image(pil_image)
-            self._normalize_state_tensors(state)
-
             if bundle.text and bundle.text.text:
                 prompt = self._text_prompt_for_model(bundle.text.text)
                 state["_sam3_text_prompt_used"] = prompt
@@ -152,6 +163,77 @@ class Sam3Adapter:
 
         self.image_state = state
         return self._result_from_image_state(bundle, state)
+
+    def _initial_state_for_image(
+        self,
+        rgb: np.ndarray,
+        bundle: PromptBundle,
+        *,
+        cache_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        cache_allowed = self._should_cache_image_state(bundle)
+        cache_key = self._image_cache_key(rgb, bundle, cache_context=cache_context) if cache_allowed else None
+
+        if (
+            cache_allowed
+            and cache_key is not None
+            and self._cached_image_state is not None
+            and self._cached_image_key == cache_key
+        ):
+            return self._clone_state(self._cached_image_state)
+
+        pil_image = Image.fromarray(rgb)
+        with self._inference_context():
+            state = self.image_processor.set_image(pil_image)
+        self._normalize_state_tensors(state)
+
+        if cache_allowed and cache_key is not None:
+            self._cached_image_key = cache_key
+            self._cached_image_state = self._clone_state(state)
+        else:
+            self._cached_image_key = None
+            self._cached_image_state = None
+        return state
+
+    def _should_cache_image_state(self, bundle: PromptBundle) -> bool:
+        return bundle.task == Sam3Task.REFINE
+
+    def _image_cache_key(
+        self,
+        rgb: np.ndarray,
+        bundle: PromptBundle,
+        *,
+        cache_context: dict[str, Any] | None = None,
+    ) -> tuple[Any, ...]:
+        arr = np.ascontiguousarray(rgb)
+        roi_bounds = None
+        layer_identity = None
+        layer_name = bundle.image.layer_name
+        if cache_context:
+            roi_bounds = cache_context.get("roi_bounds")
+            layer_identity = cache_context.get("layer_identity")
+            layer_name = str(cache_context.get("layer_name") or layer_name)
+        fingerprint = hashlib.blake2b(
+            arr.view(np.uint8),
+            digest_size=16,
+        ).hexdigest()
+        checkpoint = str(self.config.checkpoint_path) if self.config.checkpoint_path else ""
+        device = str(self._resolved_device(allow_cpu_fallback=True))
+        return (
+            layer_name,
+            layer_identity,
+            bundle.image.frame_index,
+            bundle.image.channel_index,
+            tuple(roi_bounds) if roi_bounds is not None else None,
+            arr.shape,
+            str(arr.dtype),
+            checkpoint,
+            device,
+            fingerprint,
+        )
+
+    def _clone_state(self, state: dict[str, Any]) -> dict[str, Any]:
+        return copy.deepcopy(state)
 
     def start_video_session(self, stack_data: np.ndarray, bundle: PromptBundle) -> Sam3Session:
         if self.video_predictor is None:

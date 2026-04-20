@@ -15,7 +15,9 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     assert "4. Prompt Tools" in source
     assert "5. Run" in source
     assert "6. Results" in source
-    assert "Step 7. Status" in source
+    assert "Step 7. Mask Operations" in source
+    assert "Log. Activity" in source
+    assert "MaskOperationsPanel" in source
     assert "collapsibleStepBadge" in source
     assert "activityIndicator" in source
     assert "Activity: SAM3 preview running..." in source
@@ -26,15 +28,19 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     assert "Score" in source
     assert "Area" in source
     assert "Detection threshold" in source
+    assert "Enable large-image local inference" in source
+    assert "512 x 512" in source
+    assert "1024 x 1024" in source
+    assert "2048 x 2048" in source
+    assert "Large-image mode ON: local ROI inference" in source
+    assert "Large-image mode OFF: full-image inference" in source
+    assert "SAM3 active ROI" in source
     assert "Type text prompt, then press Enter to run..." in source
     assert "textPromptInput" in source
     assert "returnPressed.connect(self._run_current_task)" in source
     assert "Text prompt returned zero objects" in source
     assert "Copy Clipboard" in source
     assert "Export CSV" in source
-    assert "Relabel layer" in source
-    assert "Values to replace" in source
-    assert "Merge Label Values" in source
     assert "Model type" in source
     assert "SAM3.0 2D/3D/video" in source
     assert "SAM3.1 video multiplex" in source
@@ -49,7 +55,8 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     assert "Saved {saved} batch label layer(s)." in source
     assert "Create Prompt Layer" in source
     assert "Clear Preview" in source
-    assert "Save Result as Labels" in source
+    assert "Save Result as Labels" not in source
+    assert "Save Accepted Object" not in source
     assert "Apply mode to selected points" in source
     assert "Add the first point to start live refinement; first run may load the model." in source
     assert "T = next point mode only. Shift+T = flip selected/latest point and rerun." in source

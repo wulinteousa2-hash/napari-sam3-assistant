@@ -32,13 +32,24 @@ from qtpy.QtWidgets import (
 )
 
 from ..adapters import Sam3Adapter, Sam3AdapterConfig, cuda_compatibility_issue
-from ..core.coordinates import extract_2d_image, infer_image_selection
+from ..core.coordinates import (
+    RoiBounds,
+    box_roi_bounds,
+    centered_roi_bounds,
+    extract_2d_image,
+    extract_2d_roi,
+    globalize_result_arrays,
+    infer_image_selection,
+    localize_bundle_to_roi,
+    roi_anchor_from_bundle,
+)
 from ..core.models import PromptBundle, Sam3Result, Sam3Session, Sam3Task
 from ..providers.sam3_repo_provider import Sam3RepoProvider
 from ..services.checkpoint_service import CheckpointService
 from ..services.layer_writer import LayerWriter
 from ..services.prompt_collector import PromptCollector
 from ..services.prompt_state_service import PromptStateService
+from ..mask_operations import MaskOperationsPanel
 from .collapsible_panel import CollapsiblePanel
 from .live_point_refinement import LivePointRefinementController
 
@@ -49,7 +60,8 @@ PROMPT_POINTS = "points"
 PROMPT_BOX = "box"
 PROMPT_LABELS = "labels"
 PROMPT_TEXT = "text"
-
+MAX_RESULTS_TABLE_ROWS_PER_RESULT = 100
+MAX_RESULTS_TABLE_TOTAL_ROWS = 2000
 SAM3_WIDGET_STYLE = """
 MainWidget {
     background: #141821;
@@ -330,6 +342,7 @@ class MainWidget(QWidget):
         self._worker: Any | None = None
         self._worker_failed = False
         self._layer_events_connected = False
+        self._active_rois: dict[str, RoiBounds] = {}
         self.settings = QSettings(SETTINGS_ORG, SETTINGS_APP)
 
         self._build_ui()
@@ -374,10 +387,12 @@ class MainWidget(QWidget):
         left_column.addWidget(CollapsiblePanel("Step 1. Model Setup", backend_group, collapsed=False))
         left_column.addWidget(CollapsiblePanel("Step 2. Task", task_group, collapsed=False))
         left_column.addWidget(CollapsiblePanel("Step 3. Layers", layers_group, collapsed=False))
-
-        right_column.addWidget(CollapsiblePanel("Step 4. Prompt Tools", prompt_group, collapsed=False))
+        left_column.addWidget(CollapsiblePanel("Step 4. Prompt Tools", prompt_group, collapsed=False))
+        
         right_column.addWidget(CollapsiblePanel("Step 5. Run", actions_group, collapsed=False))
         right_column.addWidget(CollapsiblePanel("Step 6. Results", results_group, collapsed=False))
+        self.mask_operations_panel = MaskOperationsPanel(self.viewer, log_callback=self._log)
+        right_column.addWidget(CollapsiblePanel("Step 7. Mask Operations", self.mask_operations_panel, collapsed=False))
 
         self.status_box = QTextEdit()
         self.status_box.setObjectName("statusBox")
@@ -392,7 +407,7 @@ class MainWidget(QWidget):
         status_layout.addWidget(self.status_box)
         status_container.setLayout(status_layout)
 
-        right_column.addWidget(CollapsiblePanel("Step 7. Status", status_container, collapsed=True))
+        right_column.addWidget(CollapsiblePanel("Log. Activity", status_container, collapsed=False))
 
         left_column.addStretch(1)
         right_column.addStretch(1)
@@ -568,6 +583,24 @@ class MainWidget(QWidget):
         )
         self.confidence_threshold_spin.valueChanged.connect(lambda _value: self._save_settings())
 
+        self.large_image_check = QCheckBox("Enable large-image local inference")
+        self.large_image_check.setChecked(False)
+        self.large_image_check.setToolTip(
+            "When enabled, SAM3 runs only on a local XY ROI around point/box prompts "
+            "and writes the result back into global image coordinates."
+        )
+        self.large_image_check.toggled.connect(self._on_large_image_mode_changed)
+
+        self.roi_size_combo = QComboBox()
+        self.roi_size_combo.addItem("512 x 512", (512, 512))
+        self.roi_size_combo.addItem("1024 x 1024", (1024, 1024))
+        self.roi_size_combo.addItem("2048 x 2048", (2048, 2048))
+        self.roi_size_combo.addItem("4096 x 4096", (4096, 4096))
+        self.roi_size_combo.addItem("8192 x 8192", (8192, 8192))
+        self.roi_size_combo.setCurrentIndex(1)
+        self.roi_size_combo.setEnabled(False)
+        self.roi_size_combo.currentIndexChanged.connect(self._on_large_image_mode_changed)
+
         self.propagation_direction_combo = QComboBox()
         self.propagation_direction_combo.addItems(["both", "forward", "backward"])
 
@@ -577,6 +610,8 @@ class MainWidget(QWidget):
         hint.setToolTip(channel_axis_tip)
         layout.addRow("", hint)
         layout.addRow("Detection threshold", self.confidence_threshold_spin)
+        layout.addRow("", self.large_image_check)
+        layout.addRow("Local ROI size", self.roi_size_combo)
         layout.addRow("3D direction", self.propagation_direction_combo)
         group.setLayout(layout)
         return group
@@ -691,10 +726,6 @@ class MainWidget(QWidget):
         cancel_btn.setObjectName("cancelButton")
         cancel_btn.clicked.connect(self._cancel_worker)
 
-        save_btn = QPushButton("Save Result as Labels")
-        save_btn.setObjectName("saveButton")
-        save_btn.clicked.connect(self._save_preview_labels)
-
         clear_preview_btn = QPushButton("Clear Preview")
         clear_preview_btn.setObjectName("clearButton")
         clear_preview_btn.clicked.connect(self._clear_preview_layers)
@@ -702,7 +733,6 @@ class MainWidget(QWidget):
         row.addWidget(self.run_btn)
         row.addWidget(self.propagate_btn)
         row.addWidget(clear_preview_btn)
-        row.addWidget(save_btn)
         row.addWidget(cancel_btn)
 
         self.live_refinement_status_label = QLabel("Activity: idle")
@@ -727,11 +757,15 @@ class MainWidget(QWidget):
         self.results_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.results_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.results_table.verticalHeader().setVisible(False)
+
+
         header = self.results_table.horizontalHeader()
         header.setStretchLastSection(True)
         header.setSectionResizeMode(QHeaderView.Stretch)
         self.results_table.setMinimumHeight(110)
-
+        self.results_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.results_table.setWordWrap(False)
+        self.results_table.setCornerButtonEnabled(False)
         clear_results_btn = QPushButton("Clear Results")
         clear_results_btn.setObjectName("clearButton")
         clear_results_btn.clicked.connect(self._clear_results_table)
@@ -747,31 +781,8 @@ class MainWidget(QWidget):
         action_row.addWidget(copy_results_btn)
         action_row.addWidget(export_results_btn)
 
-        relabel_form = QFormLayout()
-        self.relabel_layer_combo = QComboBox()
-        self.relabel_source_edit = QLineEdit()
-        self.relabel_source_edit.setPlaceholderText("Example: 3,4,5,6")
-        self.relabel_target_spin = QSpinBox()
-        self.relabel_target_spin.setRange(0, 2_147_483_647)
-        self.relabel_target_spin.setValue(3)
-
-        refresh_relabel_btn = QPushButton("Refresh Label Layers")
-        refresh_relabel_btn.clicked.connect(self._refresh_relabel_layers)
-        apply_relabel_btn = QPushButton("Merge Label Values")
-        apply_relabel_btn.clicked.connect(self._merge_label_values)
-
-        relabel_buttons = QHBoxLayout()
-        relabel_buttons.addWidget(refresh_relabel_btn)
-        relabel_buttons.addWidget(apply_relabel_btn)
-
-        relabel_form.addRow("Relabel layer", self.relabel_layer_combo)
-        relabel_form.addRow("Values to replace", self.relabel_source_edit)
-        relabel_form.addRow("New value", self.relabel_target_spin)
-
         layout.addWidget(self.results_table)
         layout.addLayout(action_row)
-        layout.addLayout(relabel_form)
-        layout.addLayout(relabel_buttons)
         group.setLayout(layout)
         return group
 
@@ -844,7 +855,7 @@ class MainWidget(QWidget):
         self.multi_text_prompt_edit.clear()
         self._log("Prompt state cleared.")
 
-    def _refresh_layers(self) -> None:
+    def _refresh_layers(self, silent: bool = False) -> None:
         if self.viewer is None:
             self.viewer = current_viewer()
             if self.viewer is not None and self.layer_writer is None:
@@ -857,8 +868,11 @@ class MainWidget(QWidget):
         self._set_combo_items(self.labels_layer_combo, self._layer_names({"labels"}))
         if hasattr(self, "relabel_layer_combo"):
             self._set_combo_items(self.relabel_layer_combo, self._layer_names({"labels"}), include_none=False)
+        if hasattr(self, "mask_operations_panel"):
+            self.mask_operations_panel.set_viewer(self.viewer)
         layer_count = 0 if self.viewer is None else len(self.viewer.layers)
-        self._log(f"Layer selectors refreshed. Viewer layers: {layer_count}.")
+        if not silent:
+            self._log(f"Layer selectors refreshed. Viewer layers: {layer_count}.")
         if hasattr(self, "live_point_refinement"):
             self._sync_live_refinement_layer()
 
@@ -991,6 +1005,7 @@ class MainWidget(QWidget):
                     labels_layer_name=self._optional_combo_data(self.labels_layer_combo),
                     text=text_prompt,
                     channel_axis=None if channel_axis < 0 else channel_axis,
+                    collect_exemplar_rois=not self._large_image_mode_enabled(),
                 )
                 bundles.append(bundle)
         return bundles
@@ -1004,12 +1019,67 @@ class MainWidget(QWidget):
         except Exception as exc:
             self._log(f"Cannot run batch image task: {exc}")
             return
+        local_jobs: dict[int, RoiBounds] = {}
+        if self._large_image_mode_enabled():
+            for index, bundle in enumerate(bundles):
+                anchor = roi_anchor_from_bundle(bundle)
+                if anchor is None:
+                    continue
+                bounds = self._active_or_new_roi_bounds(
+                    bundle,
+                    anchor,
+                    self._selection_image_hw(bundle.image),
+                    self._selected_roi_size(),
+                )
+                self._active_rois[bundle.image.layer_name] = bounds
+                local_jobs[index] = bounds
+            if local_jobs:
+                self._show_active_roi_overlay(
+                    "batch",
+                    None,
+                    extra_bounds=[
+                        (bundles[index].image.layer_name, bounds)
+                        for index, bounds in local_jobs.items()
+                    ],
+                )
 
         @thread_worker
         def run_batch():
-            for bundle in bundles:
+            for index, bundle in enumerate(bundles):
                 image_layer = self.viewer.layers[bundle.image.layer_name]
-                result = adapter.run_image(image_layer.data, bundle)
+                bounds = local_jobs.get(index)
+                if bounds is not None:
+                    roi_data = extract_2d_roi(image_layer.data, bundle.image, bounds)
+                    local_bundle = localize_bundle_to_roi(bundle, bounds, tuple(roi_data.shape))
+                    result = adapter.run_image(
+                        roi_data,
+                        local_bundle,
+                        cache_context=self._cache_context_for_layer(
+                            image_layer,
+                            bundle,
+                            roi_bounds=bounds,
+                        ),
+                    )
+                    labels, masks, boxes = globalize_result_arrays(
+                        labels=result.labels,
+                        masks=result.masks,
+                        boxes_xyxy=result.boxes_xyxy,
+                        bounds=bounds,
+                        image_hw=self._selection_image_hw(bundle.image),
+                    )
+                    result.labels = labels
+                    result.masks = masks
+                    result.boxes_xyxy = boxes
+                    result.metadata["large_image_roi"] = (bounds.y0, bounds.x0, bounds.y1, bounds.x1)
+                    result.metadata["large_image_mode"] = True
+                    result.metadata["large_image_hw"] = self._selection_image_hw(bundle.image)
+                    result.metadata["result_space"] = "global_image"
+                else:
+                    result = adapter.run_image(
+                        image_layer.data,
+                        bundle,
+                        cache_context=self._cache_context_for_layer(image_layer, bundle),
+                    )
                 result.metadata["image_layer"] = bundle.image.layer_name
                 if bundle.text and bundle.text.text:
                     result.metadata["batch_prompt"] = bundle.text.text
@@ -1024,11 +1094,27 @@ class MainWidget(QWidget):
             f"Running {len(bundles)} batch job(s): {image_count} image layer(s), "
             f"{prompt_count} prompt(s)."
         )
+        if self._large_image_mode_enabled():
+            self._log(
+                f"Large-image mode ON: local ROI inference for {len(local_jobs)} "
+                "anchored batch job(s); jobs without point/box anchors use full-image inference."
+            )
+        else:
+            self._log("Large-image mode OFF: full-image inference.")
 
     def _run_image_task(self, bundle: PromptBundle) -> None:
         if self.viewer is None or self.layer_writer is None:
             self._log("No napari viewer was provided to the widget.")
             return
+        if self._large_image_mode_enabled():
+            anchor = roi_anchor_from_bundle(bundle)
+            if anchor is not None:
+                self._run_large_image_task(bundle, anchor)
+                return
+            self._log(
+                "Large-image mode ON, but no point or box ROI anchor was found. "
+                "Using full-image inference for this task."
+            )
         image_layer = self.viewer.layers[bundle.image.layer_name]
         try:
             adapter = self._ensure_adapter()
@@ -1038,7 +1124,11 @@ class MainWidget(QWidget):
 
         @thread_worker
         def run_image() -> Sam3Result:
-            result = adapter.run_image(image_layer.data, bundle)
+            result = adapter.run_image(
+                image_layer.data,
+                bundle,
+                cache_context=self._cache_context_for_layer(image_layer, bundle),
+            )
             result.metadata["image_layer"] = bundle.image.layer_name
             return result
 
@@ -1046,6 +1136,64 @@ class MainWidget(QWidget):
         worker.returned.connect(self._write_image_result)
         self._start_worker(worker)
         self._log(f"Running {bundle.task.value} on image layer '{bundle.image.layer_name}'.")
+        if self._large_image_mode_enabled():
+            self._log("Large-image mode OFF for this run: no local ROI anchor available.")
+        else:
+            self._log("Large-image mode OFF: full-image inference.")
+
+    def _run_large_image_task(self, bundle: PromptBundle, anchor: tuple[float, float]) -> None:
+        if self.viewer is None or self.layer_writer is None:
+            self._log("No napari viewer was provided to the widget.")
+            return
+        image_layer = self.viewer.layers[bundle.image.layer_name]
+        image_hw = self._selection_image_hw(bundle.image)
+        roi_size = self._selected_roi_size()
+        bounds = self._active_or_new_roi_bounds(bundle, anchor, image_hw, roi_size)
+        self._active_rois[bundle.image.layer_name] = bounds
+        self._show_active_roi_overlay(bundle.image.layer_name, bounds)
+        try:
+            adapter = self._ensure_adapter()
+        except Exception as exc:
+            self._log(f"Cannot run local ROI task: {exc}")
+            return
+
+        @thread_worker
+        def run_local_roi() -> Sam3Result:
+            roi_data = extract_2d_roi(image_layer.data, bundle.image, bounds)
+            local_bundle = localize_bundle_to_roi(bundle, bounds, tuple(roi_data.shape))
+            result = adapter.run_image(
+                        roi_data,
+                        local_bundle,
+                        cache_context=self._cache_context_for_layer(
+                            image_layer,
+                            bundle,
+                            roi_bounds=bounds,
+                        ),
+                    )
+            labels, masks, boxes = globalize_result_arrays(
+                labels=result.labels,
+                masks=result.masks,
+                boxes_xyxy=result.boxes_xyxy,
+                bounds=bounds,
+                image_hw=image_hw,
+            )
+            result.labels = labels
+            result.masks = masks
+            result.boxes_xyxy = boxes
+            result.metadata["image_layer"] = bundle.image.layer_name
+            result.metadata["large_image_roi"] = (bounds.y0, bounds.x0, bounds.y1, bounds.x1)
+            result.metadata["large_image_mode"] = True
+            result.metadata["large_image_hw"] = image_hw
+            result.metadata["result_space"] = "global_image"
+            return result
+
+        worker = run_local_roi()
+        worker.returned.connect(self._write_image_result)
+        self._start_worker(worker)
+        self._log(
+            f"Large-image mode ON: local ROI inference ({bounds.width} x {bounds.height}); "
+            f"ROI y={bounds.y0}:{bounds.y1}, x={bounds.x0}:{bounds.x1}."
+        )
 
     def _run_video_task(self, bundle: PromptBundle) -> None:
         if self.viewer is None or self.layer_writer is None:
@@ -1112,18 +1260,22 @@ class MainWidget(QWidget):
         if result.is_empty():
             self._log("SAM3 returned no result.")
             self._log(self._result_summary(result))
+            self._log_large_image_result_guidance(result)
             self._log_text_result_guidance(result)
             return
+        update_boxes = self._should_update_boxes_for_result(result)
         self.layer_writer.write_result(
             result,
             labels_name="SAM3 preview labels",
             mask_name="SAM3 preview masks",
             boxes_name="SAM3 preview boxes",
+            update_boxes=update_boxes,
         )
         if self._current_task() == Sam3Task.REFINE:
             self._activate_points_layer_for_live_refinement()
         self._append_result_rows(result)
         self._log(self._result_summary(result))
+        self._log_large_image_result_guidance(result)
         self._log_text_result_guidance(result)
 
     def _write_batch_image_result(self, result: Sam3Result) -> None:
@@ -1138,6 +1290,7 @@ class MainWidget(QWidget):
             target = f"{image_layer_name} / {prompt}" if prompt else image_layer_name
             self._log(f"SAM3 returned no result for '{target}'.")
             self._log(self._result_summary(result))
+            self._log_large_image_result_guidance(result)
             self._log_text_result_guidance(result)
             return
         self.layer_writer.write_result(
@@ -1145,10 +1298,12 @@ class MainWidget(QWidget):
             labels_name=f"SAM3 preview labels [{suffix}]",
             mask_name=f"SAM3 preview masks [{suffix}]",
             boxes_name=f"SAM3 preview boxes [{suffix}]",
+            update_boxes=self._should_update_boxes_for_result(result),
         )
         self._append_result_rows(result)
         target = f"{image_layer_name} / {prompt}" if prompt else image_layer_name
         self._log(f"{target}: {self._result_summary(result)}")
+        self._log_large_image_result_guidance(result)
         self._log_text_result_guidance(result)
 
     def _write_video_result(self, result: Sam3Result) -> None:
@@ -1196,12 +1351,142 @@ class MainWidget(QWidget):
             labels_layer_name=self._optional_combo_data(self.labels_layer_combo),
             text=self.text_prompt_edit.text(),
             channel_axis=None if channel_axis < 0 else channel_axis,
+            collect_exemplar_rois=not self._large_image_mode_enabled(),
         )
 
     def _safe_layer_suffix(self, name: str) -> str:
         suffix = "".join(char if char.isalnum() or char in ("-", "_", " ") else "_" for char in name)
         suffix = " ".join(suffix.split())
         return suffix or "image"
+
+    def _large_image_mode_enabled(self) -> bool:
+        return bool(hasattr(self, "large_image_check") and self.large_image_check.isChecked())
+
+    def _selected_roi_size(self) -> tuple[int, int]:
+        if not hasattr(self, "roi_size_combo"):
+            return (1024, 1024)
+        value = self.roi_size_combo.currentData()
+        if isinstance(value, tuple) and len(value) == 2:
+            return int(value[0]), int(value[1])
+        return (1024, 1024)
+
+    def _on_large_image_mode_changed(self, *_args: Any) -> None:
+        enabled = self._large_image_mode_enabled()
+        self.roi_size_combo.setEnabled(enabled)
+        if enabled:
+            width, height = self._selected_roi_size()
+            self._log(f"Large-image mode ON: local ROI inference ({width} x {height}).")
+        else:
+            self._active_rois.clear()
+            self._clear_active_roi_overlay()
+            self._log("Large-image mode OFF: full-image inference.")
+
+    def _selection_image_hw(self, selection) -> tuple[int, int]:
+        y_axis, x_axis = selection.spatial_axes
+        return int(selection.data_shape[y_axis]), int(selection.data_shape[x_axis])
+
+    def _cache_context_for_layer(
+        self,
+        image_layer: Any,
+        bundle: PromptBundle,
+        *,
+        roi_bounds: RoiBounds | None = None,
+    ) -> dict[str, Any]:
+        roi_tuple = None
+        if roi_bounds is not None:
+            roi_tuple = (int(roi_bounds.y0), int(roi_bounds.x0), int(roi_bounds.y1), int(roi_bounds.x1))
+        return {
+            "layer_name": str(getattr(image_layer, "name", bundle.image.layer_name) or bundle.image.layer_name),
+            "layer_identity": id(image_layer),
+            "frame_index": bundle.image.frame_index,
+            "channel_index": bundle.image.channel_index,
+            "roi_bounds": roi_tuple,
+        }
+
+
+    def _current_image_canvas_shape(self, image_layer: Any) -> tuple[int, int]:
+        if self.viewer is None:
+            raise RuntimeError("No napari viewer was provided to the widget.")
+        channel_axis = self.channel_axis_spin.value()
+        base_data = self._base_layer_data(image_layer.data)
+        selection = infer_image_selection(
+            layer_name=image_layer.name,
+            data_shape=tuple(base_data.shape),
+            dims_current_step=tuple(self.viewer.dims.current_step),
+            channel_axis=None if channel_axis < 0 else channel_axis,
+        )
+        frame = np.asarray(extract_2d_image(base_data, selection))
+        if frame.ndim == 2:
+            return tuple(int(v) for v in frame.shape)
+        return int(frame.shape[0]), int(frame.shape[1])
+
+    def _base_layer_data(self, data: Any) -> Any:
+        if isinstance(data, (list, tuple)) and data:
+            return data[0]
+        try:
+            if hasattr(data, "_data") and hasattr(data, "__len__") and len(data):
+                return data[0]
+        except Exception:
+            pass
+        return data
+
+    def _active_or_new_roi_bounds(
+        self,
+        bundle: PromptBundle,
+        anchor: tuple[float, float],
+        image_hw: tuple[int, int],
+        roi_size: tuple[int, int],
+    ) -> RoiBounds:
+        current = self._active_rois.get(bundle.image.layer_name)
+        anchor_y, anchor_x = anchor
+        if current is not None and current.contains_yx(anchor_y, anchor_x):
+            return current
+        if bundle.boxes and not bundle.points:
+            return box_roi_bounds(bundle.boxes[-1], image_hw=image_hw, roi_hw=roi_size)
+        return centered_roi_bounds(anchor_y, anchor_x, image_hw=image_hw, roi_hw=roi_size)
+
+    def _show_active_roi_overlay(
+        self,
+        image_layer_name: str,
+        bounds: RoiBounds | None,
+        *,
+        extra_bounds: list[tuple[str, RoiBounds]] | None = None,
+    ) -> None:
+        if self.viewer is None:
+            return
+        if extra_bounds is not None:
+            rows = extra_bounds
+        elif bounds is not None:
+            rows = [(image_layer_name, bounds)]
+        else:
+            rows = []
+        rectangles = [roi_bounds.as_rectangle() for _name, roi_bounds in rows]
+        properties = {"source": np.asarray([name for name, _bounds in rows], dtype=object)}
+        name = "SAM3 active ROI"
+        try:
+            layer = self.viewer.layers[name]
+        except (KeyError, ValueError):
+            layer = self.viewer.add_shapes(
+                rectangles,
+                shape_type="rectangle",
+                name=name,
+                edge_color="#d6a657",
+                face_color="#d6a65722",
+                properties=properties,
+            )
+        else:
+            layer.data = rectangles
+            layer.properties = properties
+        self._set_layer_mode(layer, "select")
+
+    def _clear_active_roi_overlay(self) -> None:
+        if self.viewer is None:
+            return
+        try:
+            layer = self.viewer.layers["SAM3 active ROI"]
+        except (KeyError, ValueError):
+            return
+        self.viewer.layers.remove(layer)
 
     def _multi_text_prompts(self) -> list[str]:
         if not hasattr(self, "multi_text_prompt_edit"):
@@ -1420,16 +1705,9 @@ class MainWidget(QWidget):
             return
         except (KeyError, ValueError):
             pass
-        channel_axis = self.channel_axis_spin.value()
-        selection = infer_image_selection(
-            layer_name=image_layer.name,
-            data_shape=tuple(image_layer.data.shape),
-            dims_current_step=tuple(self.viewer.dims.current_step),
-            channel_axis=None if channel_axis < 0 else channel_axis,
-        )
-        frame = extract_2d_image(np.asarray(image_layer.data), selection)
+        frame_shape = self._current_image_canvas_shape(image_layer)
         labels = self.viewer.add_labels(
-            np.zeros(frame.shape[-2:], dtype=np.uint32),
+            np.zeros(frame_shape, dtype=np.uint32),
             name="SAM3 preview labels",
         )
         labels.visible = True
@@ -1473,7 +1751,7 @@ class MainWidget(QWidget):
         except (KeyError, ValueError):
             pass
 
-        data = np.zeros(image_layer.data.shape[-2:], dtype=np.uint8)
+        data = np.zeros(self._current_image_canvas_shape(image_layer), dtype=np.uint8)
         layer = self.viewer.add_labels(data, name=name)
         return layer
 
@@ -1799,19 +2077,48 @@ class MainWidget(QWidget):
                 values.append(item.text() if item is not None else "")
             rows.append(values)
         return rows
-
+    
     def _append_result_rows(self, result: Sam3Result) -> None:
         rows = self._result_rows(result)
-        for row in rows:
-            row_index = self.results_table.rowCount()
-            self.results_table.insertRow(row_index)
-            for column, value in enumerate(row):
-                item = QTableWidgetItem(value)
-                item.setTextAlignment(Qt.AlignCenter)
-                self.results_table.setItem(row_index, column, item)
+        if not rows:
+            return
+
+        remaining = MAX_RESULTS_TABLE_TOTAL_ROWS - self.results_table.rowCount()
+        if remaining <= 0:
+            self._log("Results table row limit reached; skipping further UI appends.")
+            return
+
+        rows = rows[:remaining]
+
+        table = self.results_table
+        table.setUpdatesEnabled(False)
+        table.blockSignals(True)
+        table.setSortingEnabled(False)
+
+        start_row = table.rowCount()
+        table.setRowCount(start_row + len(rows))
+
+        try:
+            for row_offset, row_values in enumerate(rows):
+                row_index = start_row + row_offset
+                for column, value in enumerate(row_values):
+                    item = QTableWidgetItem(value)
+                    item.setTextAlignment(Qt.AlignCenter)
+                    table.setItem(row_index, column, item)
+        finally:
+            table.blockSignals(False)
+            table.setUpdatesEnabled(True)
 
     def _result_rows(self, result: Sam3Result) -> list[tuple[str, str, str, str, str, str]]:
         object_ids = self._result_object_ids(result)
+        total_objects = len(object_ids)
+
+        if total_objects > MAX_RESULTS_TABLE_ROWS_PER_RESULT:
+            object_ids = object_ids[:MAX_RESULTS_TABLE_ROWS_PER_RESULT]
+            truncated = True
+        else:
+            truncated = False
+
         scores = self._result_scores(result, len(object_ids))
         areas = self._result_areas(result, object_ids)
         layer = str(result.metadata.get("image_layer") or "-")
@@ -1836,6 +2143,13 @@ class MainWidget(QWidget):
                     "-" if area is None else str(int(area)),
                 )
             )
+
+        if truncated:
+            self._log(
+                f"Results table capped at {MAX_RESULTS_TABLE_ROWS_PER_RESULT} rows "
+                f"(total objects: {total_objects}). Export logic can be extended later if needed."
+            )
+
         return rows
 
     def _result_object_ids(self, result: Sam3Result) -> np.ndarray:
@@ -1857,12 +2171,33 @@ class MainWidget(QWidget):
     def _result_areas(self, result: Sam3Result, object_ids: np.ndarray) -> list[int | None]:
         if result.labels is not None:
             labels = np.asarray(result.labels)
-            return [int(np.count_nonzero(labels == int(object_id))) for object_id in object_ids]
+            flat = labels.reshape(-1)
+            if flat.size == 0:
+                return [None] * len(object_ids)
+
+            max_id = int(flat.max())
+            if max_id <= 0:
+                return [None] * len(object_ids)
+
+            counts = np.bincount(flat.astype(np.int64), minlength=max_id + 1)
+            return [
+                int(counts[int(object_id)]) if 0 <= int(object_id) < len(counts) else 0
+                for object_id in object_ids
+            ]
+
         if result.masks is not None:
             masks = np.asarray(result.masks)
             if masks.ndim >= 3:
                 return [int(np.count_nonzero(mask)) for mask in masks[: len(object_ids)]]
+
         return [None] * len(object_ids)
+
+    def _should_update_boxes_for_result(self, result: Sam3Result) -> bool:
+        if self._current_task() != Sam3Task.REFINE:
+            return True
+        if result.metadata.get("large_image_mode"):
+            return False
+        return False
 
     def _current_task(self) -> Sam3Task:
         return self.task_combo.currentData()
@@ -1903,7 +2238,7 @@ class MainWidget(QWidget):
         events = getattr(self.viewer.layers, "events", None)
         if events is None:
             return
-        for event_name in ("inserted", "removed", "changed", "reordered"):
+        for event_name in ("inserted", "removed", "reordered"):
             event = getattr(events, event_name, None)
             if event is None:
                 continue
@@ -1914,7 +2249,7 @@ class MainWidget(QWidget):
         self._layer_events_connected = True
 
     def _on_layers_changed(self, event: Any = None) -> None:
-        self._refresh_layers()
+        self._refresh_layers(silent=True)
 
     def _set_combo_items(
         self,
@@ -1974,6 +2309,13 @@ class MainWidget(QWidget):
                 "Text prompt returned zero objects. Try a short noun phrase, lower "
                 "Detection threshold, or use a box/exemplar prompt for microscopy-specific structures."
             )
+
+    def _log_large_image_result_guidance(self, result: Sam3Result) -> None:
+        roi = result.metadata.get("large_image_roi")
+        if not roi:
+            return
+        y0, x0, y1, x1 = roi
+        self._log(f"Active ROI bounds: y={y0}:{y1}, x={x0}:{x1}.")
 
     def _log(self, message: str) -> None:
         self.status_box.append(message)

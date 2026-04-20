@@ -100,11 +100,6 @@ class LayerWriter:
             layer.refresh()
 
     def _result_translate(self, result: Sam3Result) -> tuple[float, float] | None:
-        result_space = str(result.metadata.get("result_space") or "")
-        if result_space == "global_image":
-            return None
-        if result_space != "roi_local":
-            return None
         roi = result.metadata.get("large_image_roi")
         if not roi:
             return None

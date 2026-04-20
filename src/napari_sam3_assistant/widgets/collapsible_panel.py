@@ -71,10 +71,9 @@ class CollapsiblePanel(QWidget):
 
     def _split_title(self, title: str) -> tuple[str, str]:
         normalized = title.strip()
-        if normalized.lower().startswith("step "):
-            step, separator, label = normalized.partition(".")
-            if separator and label.strip():
-                return step.strip(), label.strip()
+        head, separator, tail = normalized.partition(".")
+        if separator and head.strip() and tail.strip():
+            return head.strip(), tail.strip()
         return "", normalized
 
     def _on_toggled(self, checked: bool) -> None:

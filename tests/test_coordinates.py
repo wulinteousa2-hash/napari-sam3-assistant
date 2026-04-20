@@ -2,11 +2,16 @@ import numpy as np
 
 from napari_sam3_assistant.core.coordinates import (
     CoordinateMapper,
+    RoiBounds,
+    centered_roi_bounds,
     extract_2d_image,
+    extract_2d_roi,
+    globalize_result_arrays,
     infer_image_selection,
+    localize_bundle_to_roi,
     to_rgb_uint8,
 )
-from napari_sam3_assistant.core.models import BoxPrompt
+from napari_sam3_assistant.core.models import BoxPrompt, PointPrompt, PromptBundle, Sam3Task
 
 
 def test_rgb_image_is_not_treated_as_stack():
@@ -64,3 +69,70 @@ def test_to_rgb_uint8_converts_float_grayscale():
     assert rgb.dtype == np.uint8
     assert rgb[0, 0, 0] == 0
     assert rgb[-1, -1, 0] == 255
+
+
+def test_extract_2d_roi_slices_only_requested_xy_region():
+    data = np.arange(2 * 10 * 12, dtype=np.uint16).reshape(2, 10, 12)
+    selection = infer_image_selection("stack", data.shape, dims_current_step=(1, 0, 0))
+    bounds = RoiBounds(y0=2, x0=3, y1=6, x1=8)
+
+    roi = extract_2d_roi(data, selection, bounds)
+
+    assert roi.shape == (4, 5)
+    np.testing.assert_array_equal(roi, data[1, 2:6, 3:8])
+
+
+def test_extract_2d_roi_uses_first_level_for_multiscale_data():
+    level0 = np.arange(10 * 12, dtype=np.uint16).reshape(10, 12)
+    multiscale = [level0, level0[::2, ::2]]
+    selection = infer_image_selection("multiscale", level0.shape)
+    bounds = RoiBounds(y0=2, x0=3, y1=6, x1=8)
+
+    roi = extract_2d_roi(multiscale, selection, bounds)
+
+    np.testing.assert_array_equal(roi, level0[2:6, 3:8])
+
+
+def test_localize_bundle_to_roi_converts_global_prompts_to_local_coordinates():
+    selection = infer_image_selection("large", (100, 120))
+    bundle = PromptBundle(
+        task=Sam3Task.REFINE,
+        image=selection,
+        points=[PointPrompt(y=45, x=55)],
+        boxes=[BoxPrompt(y0=40, x0=50, y1=70, x1=90)],
+    )
+    bounds = RoiBounds(y0=32, x0=40, y1=96, x1=104)
+
+    local = localize_bundle_to_roi(bundle, bounds, (64, 64, 3))
+
+    assert local.image.data_shape == (64, 64, 3)
+    assert local.points[0].y == 13
+    assert local.points[0].x == 15
+    assert local.boxes[0].y0 == 8
+    assert local.boxes[0].x0 == 10
+
+
+def test_globalize_result_arrays_writes_roi_labels_to_global_canvas():
+    local_labels = np.zeros((4, 5), dtype=np.uint32)
+    local_labels[1:3, 2:4] = 7
+    bounds = RoiBounds(y0=2, x0=3, y1=6, x1=8)
+
+    labels, masks, boxes = globalize_result_arrays(
+        labels=local_labels,
+        masks=None,
+        boxes_xyxy=np.asarray([[1, 1, 4, 3]], dtype=np.float32),
+        bounds=bounds,
+        image_hw=(10, 12),
+    )
+
+    assert masks is None
+    assert labels.shape == (10, 12)
+    assert labels[3, 5] == 7
+    assert labels[0, 0] == 0
+    np.testing.assert_allclose(boxes, np.asarray([[4, 3, 7, 5]], dtype=np.float32))
+
+
+def test_centered_roi_bounds_clamps_to_image_edges():
+    bounds = centered_roi_bounds(5, 5, image_hw=(100, 120), roi_hw=(64, 64))
+
+    assert bounds == RoiBounds(y0=0, x0=0, y1=64, x1=64)
