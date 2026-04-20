@@ -25,7 +25,38 @@ This project is under active development. The current widget supports local SAM 
 
 ### 3.0.0
 
-Major update compared with 2.0.0, focused on large-image segmentation, mask operations, SAM3.1 support, clearer model selection, live refinement, bug fixes, and result handling.
+Major update compared with 2.0.0, focused on large-image segmentation, Step 7 mask operations, workflow modularization, and bug fixes.
+
+Added:
+
+- Optional large-image local inference mode for OME-Zarr, large TIFF, and similar very large images, including images on the order of `60000 x 50000` pixels when the data source can provide lazy ROI reads.
+- Local ROI inference with selectable ROI sizes from `512 x 512` through `8192 x 8192`.
+- Active ROI overlay layer showing the current SAM3 local inference window in global image coordinates.
+- Step 7 `Mask Operations` workflow for accepting, cleaning, merging, and exporting segmentation masks.
+- Accepted-object saving with object name, class name, class value, append, and replace modes.
+- Class-level merge workflow for accepted object layers.
+- Mask cleanup tools for connected-component analysis, deleting selected components, removing small objects, filling holes, smoothing masks, keeping the largest object, and relabeling values.
+- Final merge/export tools for semantic, instance, and binary output masks.
+- Overlap handling during final mask merge with priority, selection-order, component-size, and background rules.
+- Mask export to TIFF, PNG, and NumPy `.npy`.
+- Task-runner modules for image, refinement, and video workflows to keep the main widget easier to maintain.
+
+Changed:
+
+- Large-image ROI choices now include `4096 x 4096` and `8192 x 8192`.
+- README now documents the large-image workflow and Step 7 mask operations.
+- Result writing handles ROI-local outputs and maps them back into global image coordinates.
+- Prompt collection and coordinate utilities support ROI-local conversion for large-image workflows.
+
+Fixed:
+
+- Improved coordinate handling for local ROI segmentation on large images.
+- Improved preview/result layer handling for ROI-local outputs.
+- Added tests for ROI extraction, prompt localization, global result mapping, and Step 7 UI presence.
+
+### 2.0.0
+
+Major update focused on SAM3.1 support, clearer model selection, live refinement, and result handling.
 
 Added:
 
@@ -43,16 +74,6 @@ Added:
 - Compact activity indicator in `Run` showing model execution, propagation, refinement, idle, and failure states.
 - Results table showing `Layer`, `Prompt`, `Frame`, `Object ID`, `Score`, and `Area`.
 - Detection threshold control for SAM3 grounding, useful when text prompts return no candidates.
-- Optional large-image local inference mode for OME-Zarr, large TIFF, and similar very large images, including images on the order of `60000 x 50000` pixels when the data source can provide lazy ROI reads.
-- Local ROI inference with selectable ROI sizes from `512 x 512` through `8192 x 8192`.
-- Active ROI overlay layer showing the current SAM3 local inference window in global image coordinates.
-- Step 7 `Mask Operations` workflow for accepting, cleaning, merging, and exporting segmentation masks.
-- Accepted-object saving with object name, class name, class value, append, and replace modes.
-- Class-level merge workflow for accepted object layers.
-- Mask cleanup tools for connected-component analysis, deleting selected components, removing small objects, filling holes, smoothing masks, keeping the largest object, and relabeling values.
-- Final merge/export tools for semantic, instance, and binary output masks.
-- Overlap handling during final mask merge with priority, selection-order, component-size, and background rules.
-- Mask export to TIFF, PNG, and NumPy `.npy`.
 - More visible text prompt input with `Enter` bound to `Run Preview`.
 - Text prompt cleanup that sends short model-facing phrases such as `myelin ring` instead of instruction text such as `segment all the myelin ring`.
 - Automatic lower-threshold retry for text segmentation when the first pass returns zero objects.
@@ -90,7 +111,6 @@ Changed:
 - Text prompt submission can be run with `Enter` without moving to the `Run Preview` button.
 - Preview clearing removes generated preview layers only and keeps prompts, saved labels, and loaded models.
 - `pytorch_model.bin` was removed from documented and validated model-file names.
-- Large-image ROI choices now include `4096 x 4096` and `8192 x 8192`.
 
 Current model support:
 
