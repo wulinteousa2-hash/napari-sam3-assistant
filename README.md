@@ -156,13 +156,14 @@ If CUDA is not available or not compatible, select **CPU** in the widget.
 
 ## Setup
 
-### Important for Windows users
+
 
 If you installed the standalone napari desktop app from the website, Plugin Manager may not work for this plugin because that app uses a different Python environment.
 
-For Windows, use a **new Conda environment with Python 3.12** and install napari, SAM 3, and `napari-sam3-assistant` there.
+Use a **new Conda environment with Python 3.12** and install napari, SAM3, and `napari-sam3-assistant` there.
 
-## Windows install in PowerShell
+### Windows
+
 
 ```powershell
 # 1) install Miniforge first from:
@@ -179,22 +180,22 @@ python -m pip install "setuptools<82"
 python -m pip install "napari[all]"
 
 # choose one:
-##CPU
+# CPU
 python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-# or
-##GPU
-python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
+# GPU
+python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+```
+
+### Install SAM3 (Windows)
+```
 git clone https://github.com/facebookresearch/sam3.git
 cd sam3
 python -m pip install --no-cache-dir sam3
 python -m pip install einops triton-windows pycocotools
-python -m pip install napari-sam3-assistant
-
-napari
 ```
 
-## Linux
+## Linux ARM64 (AArch64)
 
 ```Bash
 # 1) install Miniforge first from:
@@ -208,19 +209,23 @@ python -m pip install "setuptools<82" "numpy>=1.26,<2"
 pip install "napari[bermuda, pyqt6, optional-numba, optional-base]"
 
 # choose one:
-##CPU
+# CPU
+
 python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-# or
-##GPU
+
+# GPU
+
 python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
 
+
+```
+### Install SAM3 (Linux ARM64)
+
+```bash
 git clone https://github.com/facebookresearch/sam3.git
 cd sam3
-python -m pip install --no-cache-dir sam3
-python -m pip install einops triton-windows pycocotools
-python -m pip install napari-sam3-assistant
+python -m pip install --no-cache-dir -e .
 
-napari
 ```
 
 
