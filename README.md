@@ -190,9 +190,13 @@ python -m pip install torch torchvision torchaudio --index-url https://download.
 ### Install SAM3 (Windows)
 ```
 git clone https://github.com/facebookresearch/sam3.git
-cd sam3
-python -m pip install --no-cache-dir sam3
+or
+# quick alternative
+python -m pip install --no-cache-dir git+https://github.com/facebookresearch/sam3
+
+
 python -m pip install einops triton-windows pycocotools
+
 ```
 
 ## Linux ARM64 (AArch64)
