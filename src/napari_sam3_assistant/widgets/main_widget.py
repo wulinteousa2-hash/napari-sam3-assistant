@@ -17,12 +17,15 @@ from qtpy.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -392,7 +395,16 @@ class MainWidget(QWidget):
         right_column.addWidget(CollapsiblePanel("Step 5. Run", actions_group, collapsed=False))
         right_column.addWidget(CollapsiblePanel("Step 6. Results", results_group, collapsed=False))
         self.mask_operations_panel = MaskOperationsPanel(self.viewer, log_callback=self._log)
-        right_column.addWidget(CollapsiblePanel("Step 7. Mask Operations", self.mask_operations_panel, collapsed=False))
+        mask_operations_scroll = QScrollArea()
+        mask_operations_scroll.setObjectName("maskOperationsScroll")
+        mask_operations_scroll.setWidgetResizable(True)
+        mask_operations_scroll.setFrameShape(QFrame.NoFrame)
+        mask_operations_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        mask_operations_scroll.setMinimumHeight(260)
+        mask_operations_scroll.setMaximumHeight(520)
+        mask_operations_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        mask_operations_scroll.setWidget(self.mask_operations_panel)
+        right_column.addWidget(CollapsiblePanel("Step 7. Mask Operations", mask_operations_scroll, collapsed=False))
 
         self.status_box = QTextEdit()
         self.status_box.setObjectName("statusBox")
@@ -407,7 +419,7 @@ class MainWidget(QWidget):
         status_layout.addWidget(self.status_box)
         status_container.setLayout(status_layout)
 
-        right_column.addWidget(CollapsiblePanel("Log. Activity", status_container, collapsed=False))
+        right_column.addWidget(CollapsiblePanel("Log. Activity", status_container, collapsed=True))
 
         left_column.addStretch(1)
         right_column.addStretch(1)

@@ -179,16 +179,51 @@ python -m pip install "setuptools<82"
 python -m pip install "napari[all]"
 
 # choose one:
+##CPU
 python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 # or
+##GPU
 python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
+git clone https://github.com/facebookresearch/sam3.git
+cd sam3
 python -m pip install --no-cache-dir sam3
 python -m pip install einops triton-windows pycocotools
 python -m pip install napari-sam3-assistant
 
 napari
 ```
+
+## Linux
+
+```Bash
+# 1) install Miniforge first from:
+# https://conda-forge.org/download/
+
+conda create -n napari-sam3 python=3.12 -y
+conda activate napari-sam3
+
+python -m pip install --upgrade pip wheel
+python -m pip install "setuptools<82" "numpy>=1.26,<2"
+pip install "napari[bermuda, pyqt6, optional-numba, optional-base]"
+
+# choose one:
+##CPU
+python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+# or
+##GPU
+python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+
+git clone https://github.com/facebookresearch/sam3.git
+cd sam3
+python -m pip install --no-cache-dir sam3
+python -m pip install einops triton-windows pycocotools
+python -m pip install napari-sam3-assistant
+
+napari
+```
+
+
 
 ## Download SAM 3 model files
 
