@@ -8,6 +8,7 @@ from napari import current_viewer
 from napari.layers import Image, Labels, Points, Shapes
 from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
+from qtpy.QtGui import QKeySequence
 from qtpy.QtCore import QSettings, Qt
 from qtpy.QtWidgets import (
     QAbstractItemView,
@@ -32,6 +33,7 @@ from qtpy.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+    QShortcut
 )
 
 from ..adapters import Sam3Adapter, Sam3AdapterConfig, cuda_compatibility_issue
@@ -698,13 +700,24 @@ class MainWidget(QWidget):
 
         self.multi_text_prompt_edit = QTextEdit()
         self.multi_text_prompt_edit.setObjectName("multiTextPromptInput")
-        self.multi_text_prompt_edit.setPlaceholderText("Optional batch prompts: one prompt per line, e.g.\ncat\ndog")
+        self.multi_text_prompt_edit.setPlaceholderText(
+            "Optional batch prompts: one prompt per line, then Press Ctrl+Enter to run batch text prompts.")
         self.multi_text_prompt_edit.setToolTip(
-            "Optional multi-text mode. Enter one concept per line. With Batch all image "
+            "Optional multi-text mode.Enter one concept per line. With Batch all image "
             "layers enabled, every prompt is run on every image layer."
         )
         self.multi_text_prompt_edit.setMaximumHeight(78)
+        self.multi_text_run_shortcut = QShortcut(
+        QKeySequence("Ctrl+Return"),
+        self.multi_text_prompt_edit,
+        )
+        self.multi_text_run_shortcut.activated.connect(self._run_current_task)
 
+        self.multi_text_run_shortcut_2 = QShortcut(
+            QKeySequence("Ctrl+Enter"),
+            self.multi_text_prompt_edit,
+        )
+        self.multi_text_run_shortcut_2.activated.connect(self._run_current_task)
         clear_btn = QPushButton("Clear Text / Prompt State")
         clear_btn.clicked.connect(self._clear_prompts)
 
