@@ -41,7 +41,7 @@ class PromptCollector:
         image_data = base_image_data(image_layer.data)
         selection = infer_image_selection(
             layer_name=image_layer.name,
-            data_shape=tuple(np.asarray(image_data).shape),
+            data_shape=self._data_shape(image_data),
             dims_current_step=tuple(viewer.dims.current_step),
             channel_axis=channel_axis,
         )
@@ -183,7 +183,7 @@ class PromptCollector:
         x1: float,
     ) -> np.ndarray:
         normalized = base_image_data(image_data)
-        selection = infer_image_selection("exemplar-source", tuple(np.asarray(normalized).shape))
+        selection = infer_image_selection("exemplar-source", self._data_shape(normalized))
         image = extract_2d_image(normalized, selection)
         height, width = image.shape[-2:]
         iy0 = max(0, min(height, int(np.floor(y0))))
@@ -191,3 +191,9 @@ class PromptCollector:
         ix0 = max(0, min(width, int(np.floor(x0))))
         ix1 = max(ix0 + 1, min(width, int(np.ceil(x1))))
         return np.asarray(image[iy0:iy1, ix0:ix1])
+
+    def _data_shape(self, data: Any) -> tuple[int, ...]:
+        shape = getattr(data, "shape", None)
+        if shape is not None:
+            return tuple(int(v) for v in shape)
+        return tuple(int(v) for v in np.asarray(data).shape)

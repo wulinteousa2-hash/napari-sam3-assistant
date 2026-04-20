@@ -9,9 +9,10 @@ from napari_sam3_assistant.core.coordinates import (
     globalize_result_arrays,
     infer_image_selection,
     localize_bundle_to_roi,
+    roi_anchor_from_bundle,
     to_rgb_uint8,
 )
-from napari_sam3_assistant.core.models import BoxPrompt, PointPrompt, PromptBundle, Sam3Task
+from napari_sam3_assistant.core.models import BoxPrompt, MaskPrompt, PointPrompt, PromptBundle, Sam3Task
 
 
 def test_rgb_image_is_not_treated_as_stack():
@@ -21,6 +22,14 @@ def test_rgb_image_is_not_treated_as_stack():
     assert selection.channel_axis == 2
     assert selection.spatial_axes == (0, 1)
     assert selection.frame_index is None
+
+
+def test_trailing_singleton_channel_is_not_treated_as_spatial_axis():
+    selection = infer_image_selection("ome-zarr", (60000, 60000, 1))
+
+    assert selection.frame_axis is None
+    assert selection.channel_axis == 2
+    assert selection.spatial_axes == (0, 1)
 
 
 def test_stack_rgb_selection_uses_leading_frame_axis():
@@ -51,6 +60,17 @@ def test_extract_2d_image_preserves_trailing_rgb_channels():
     assert extracted[..., 1].max() == 255
 
 
+def test_extract_2d_roi_preserves_trailing_singleton_channel():
+    data = np.arange(10 * 12, dtype=np.uint16).reshape(10, 12, 1)
+    selection = infer_image_selection("ome-zarr", data.shape)
+    bounds = RoiBounds(y0=2, x0=3, y1=6, x1=8)
+
+    roi = extract_2d_roi(data, selection, bounds)
+
+    assert roi.shape == (4, 5, 1)
+    np.testing.assert_array_equal(roi[..., 0], data[2:6, 3:8, 0])
+
+
 def test_box_coordinate_formats_match_sam3_image_and_video_expectations():
     selection = infer_image_selection("image", (100, 200))
     mapper = CoordinateMapper(selection)
@@ -69,6 +89,17 @@ def test_to_rgb_uint8_converts_float_grayscale():
     assert rgb.dtype == np.uint8
     assert rgb[0, 0, 0] == 0
     assert rgb[-1, -1, 0] == 255
+
+
+def test_to_rgb_uint8_converts_singleton_channel_grayscale():
+    image = np.asarray([[[0], [10]], [[20], [30]]], dtype=np.uint16)
+
+    rgb = to_rgb_uint8(image)
+
+    assert rgb.shape == (2, 2, 3)
+    assert rgb.dtype == np.uint8
+    np.testing.assert_array_equal(rgb[..., 0], rgb[..., 1])
+    np.testing.assert_array_equal(rgb[..., 1], rgb[..., 2])
 
 
 def test_extract_2d_roi_slices_only_requested_xy_region():
@@ -136,3 +167,34 @@ def test_centered_roi_bounds_clamps_to_image_edges():
     bounds = centered_roi_bounds(5, 5, image_hw=(100, 120), roi_hw=(64, 64))
 
     assert bounds == RoiBounds(y0=0, x0=0, y1=64, x1=64)
+
+
+def test_roi_anchor_from_bundle_uses_labels_mask_bbox_center():
+    selection = infer_image_selection("large", (100, 120))
+    mask = np.zeros((100, 120), dtype=bool)
+    mask[20:31, 40:61] = True
+    bundle = PromptBundle(
+        task=Sam3Task.SEGMENT_2D,
+        image=selection,
+        masks=[MaskPrompt(mask=mask)],
+    )
+
+    assert roi_anchor_from_bundle(bundle) == (25.0, 50.0)
+
+
+def test_localize_bundle_to_roi_crops_labels_mask_to_local_roi():
+    selection = infer_image_selection("large", (100, 120))
+    mask = np.zeros((100, 120), dtype=bool)
+    mask[20:31, 40:61] = True
+    bundle = PromptBundle(
+        task=Sam3Task.SEGMENT_2D,
+        image=selection,
+        masks=[MaskPrompt(mask=mask)],
+    )
+    bounds = RoiBounds(y0=16, x0=32, y1=48, x1=64)
+
+    local = localize_bundle_to_roi(bundle, bounds, (32, 32, 3))
+
+    assert len(local.masks) == 1
+    assert local.masks[0].mask.shape == (32, 32)
+    assert local.masks[0].mask[4:15, 8:29].all()

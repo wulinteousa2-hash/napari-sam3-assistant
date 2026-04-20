@@ -10,6 +10,14 @@ class FakeLayers(dict):
     pass
 
 
+class ShapeOnlyData:
+    def __init__(self, shape):
+        self.shape = tuple(shape)
+
+    def __array__(self, dtype=None):
+        raise AssertionError("Large lazy data should not be materialized while collecting prompts.")
+
+
 def _viewer(layers, current_step=(0, 0, 0)):
     return SimpleNamespace(layers=FakeLayers(layers), dims=SimpleNamespace(current_step=current_step))
 
@@ -29,6 +37,22 @@ def test_collect_text_prompt_without_prompt_layers():
     assert bundle.text is not None
     assert bundle.text.text == "myelin ring"
     assert bundle.has_prompt()
+
+
+def test_collect_uses_lazy_shape_without_materializing_image_data():
+    image = SimpleNamespace(name="ome-zarr", data=ShapeOnlyData((60000, 60000, 1)))
+    viewer = _viewer({"image": image})
+
+    bundle = PromptCollector().collect(
+        viewer,
+        image_layer_name="image",
+        task=Sam3Task.TEXT,
+        text="cell",
+    )
+
+    assert bundle.image.data_shape == (60000, 60000, 1)
+    assert bundle.image.channel_axis == 2
+    assert bundle.image.spatial_axes == (0, 1)
 
 
 def test_points_layer_polarity_properties_are_collected():

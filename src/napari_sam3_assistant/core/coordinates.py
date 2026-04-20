@@ -94,7 +94,7 @@ def infer_image_selection(
     if ndim < 2:
         raise ValueError("SAM3 requires an image layer with at least two spatial axes.")
 
-    if channel_axis is None and ndim >= 3 and data_shape[-1] in (3, 4):
+    if channel_axis is None and ndim >= 3 and data_shape[-1] in (1, 3, 4):
         channel_axis = ndim - 1
 
     if channel_axis == ndim - 1 and ndim >= 3:
@@ -145,7 +145,7 @@ def extract_2d_image(data: np.ndarray, selection: ImageSelection) -> np.ndarray:
         index[selection.channel_axis] = selection.channel_index or 0
 
     sliced = arr[tuple(index)]
-    while sliced.ndim > 2 and sliced.shape[-1] not in (3, 4):
+    while sliced.ndim > 2 and sliced.shape[-1] not in (1, 3, 4):
         sliced = sliced[0]
     return np.asarray(sliced)
 
@@ -170,7 +170,7 @@ def extract_2d_roi(
     index[x_axis] = slice(bounds.x0, bounds.x1)
 
     sliced = np.asarray(base_image_data(data)[tuple(index)])
-    while sliced.ndim > 2 and sliced.shape[-1] not in (3, 4):
+    while sliced.ndim > 2 and sliced.shape[-1] not in (1, 3, 4):
         sliced = sliced[0]
     return sliced
 
@@ -234,7 +234,21 @@ def roi_anchor_from_bundle(bundle: PromptBundle) -> tuple[float, float] | None:
     if bundle.boxes:
         box = bundle.boxes[-1]
         return (float(box.y0) + float(box.y1)) * 0.5, (float(box.x0) + float(box.x1)) * 0.5
+    for mask_prompt in bundle.masks:
+        anchor = _mask_anchor(mask_prompt.mask)
+        if anchor is not None:
+            return anchor
     return None
+
+
+def _mask_anchor(mask: np.ndarray) -> tuple[float, float] | None:
+    arr = np.asarray(mask)
+    if arr.ndim != 2 or arr.size == 0:
+        return None
+    ys, xs = np.nonzero(arr)
+    if ys.size == 0:
+        return None
+    return (float(ys.min() + ys.max()) * 0.5, float(xs.min() + xs.max()) * 0.5)
 
 
 def localize_bundle_to_roi(
@@ -242,7 +256,7 @@ def localize_bundle_to_roi(
     bounds: RoiBounds,
     roi_shape: tuple[int, ...],
 ) -> PromptBundle:
-    channel_axis = len(roi_shape) - 1 if len(roi_shape) >= 3 and roi_shape[-1] in (3, 4) else None
+    channel_axis = len(roi_shape) - 1 if len(roi_shape) >= 3 and roi_shape[-1] in (1, 3, 4) else None
     local_image = infer_image_selection(
         layer_name=bundle.image.layer_name,
         data_shape=tuple(int(v) for v in roi_shape),
@@ -318,6 +332,8 @@ def to_rgb_uint8(image_2d_or_rgb: np.ndarray) -> np.ndarray:
     arr = np.asarray(image_2d_or_rgb)
     if arr.ndim == 2:
         arr = np.stack([arr, arr, arr], axis=-1)
+    elif arr.ndim == 3 and arr.shape[-1] == 1:
+        arr = np.repeat(arr, 3, axis=-1)
     elif arr.ndim == 3 and arr.shape[-1] == 4:
         arr = arr[..., :3]
     elif arr.ndim == 3 and arr.shape[-1] != 3:
