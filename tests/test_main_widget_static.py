@@ -10,12 +10,11 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     source = WIDGET_SOURCE.read_text(encoding="utf-8")
 
     assert "1. Model Setup" in source
-    assert "2. Task" in source
-    assert "3. Layers" in source
-    assert "4. Prompt Tools" in source
-    assert "5. Run" in source
-    assert "6. Results" in source
-    assert "Step 7. Mask Operations" in source
+    assert "2. Task Setup" in source
+    assert "3. Prompt Tools" in source
+    assert "4. Run" in source
+    assert "5. Results" in source
+    assert "Step 6. Mask Operations" in source
     assert "Log. Activity" in source
     assert "MaskOperationsPanel" in source
     assert "collapsibleStepBadge" in source
@@ -27,6 +26,9 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     assert "Object ID" in source
     assert "Score" in source
     assert "Area" in source
+    assert "Target image" in source
+    assert "Advanced" in source
+    assert "Only change these if your image layout or detection behavior needs manual tuning." in source
     assert "Detection threshold" in source
     assert "Enable large-image local inference" in source
     assert "512 x 512" in source

@@ -23,6 +23,20 @@ This project is under active development. The current widget supports local SAM 
 
 ## Changelog
 
+### 3.1.0
+
+Small workflow cleanup release focused on making the main widget easier to use.
+
+Changed:
+
+- Renamed `Step 2. Task` to `Step 2. Task Setup`.
+- Removed the separate `Layers` step.
+- Moved image selection into Task Setup as `Target image`.
+- Added a collapsed `Advanced` section for channel axis, detection threshold, and 3D direction.
+- Kept common controls visible by default: task, target image, batch mode, large-image mode, and ROI size.
+- Renumbered the remaining steps so the workflow reads from setup to prompts, run, results, and mask operations.
+- Kept backend behavior, prompt collection, batch processing, large-image inference, and result writing unchanged.
+
 ### 3.0.0
 
 Major update compared with 2.0.0, focused on large-image segmentation, Step 7 mask operations, workflow modularization, and bug fixes.

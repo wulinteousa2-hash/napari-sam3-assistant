@@ -384,18 +384,16 @@ class MainWidget(QWidget):
 
         backend_group = self._build_backend_group()
         task_group = self._build_task_group()
-        layers_group = self._build_layers_group()
         prompt_group = self._build_prompt_group()
         actions_group = self._build_actions_group()
         results_group = self._build_results_group()
 
         left_column.addWidget(CollapsiblePanel("Step 1. Model Setup", backend_group, collapsed=False))
-        left_column.addWidget(CollapsiblePanel("Step 2. Task", task_group, collapsed=False))
-        left_column.addWidget(CollapsiblePanel("Step 3. Layers", layers_group, collapsed=False))
-        left_column.addWidget(CollapsiblePanel("Step 4. Prompt Tools", prompt_group, collapsed=False))
+        left_column.addWidget(CollapsiblePanel("Step 2. Task Setup", task_group, collapsed=False))
+        left_column.addWidget(CollapsiblePanel("Step 3. Prompt Tools", prompt_group, collapsed=False))
         
-        right_column.addWidget(CollapsiblePanel("Step 5. Run", actions_group, collapsed=False))
-        right_column.addWidget(CollapsiblePanel("Step 6. Results", results_group, collapsed=False))
+        right_column.addWidget(CollapsiblePanel("Step 4. Run", actions_group, collapsed=False))
+        right_column.addWidget(CollapsiblePanel("Step 5. Results", results_group, collapsed=False))
         self.mask_operations_panel = MaskOperationsPanel(self.viewer, log_callback=self._log)
         mask_operations_scroll = QScrollArea()
         mask_operations_scroll.setObjectName("maskOperationsScroll")
@@ -406,7 +404,7 @@ class MainWidget(QWidget):
         mask_operations_scroll.setMaximumHeight(520)
         mask_operations_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         mask_operations_scroll.setWidget(self.mask_operations_panel)
-        right_column.addWidget(CollapsiblePanel("Step 7. Mask Operations", mask_operations_scroll, collapsed=False))
+        right_column.addWidget(CollapsiblePanel("Step 6. Mask Operations", mask_operations_scroll, collapsed=False))
 
         self.status_box = QTextEdit()
         self.status_box.setObjectName("statusBox")
@@ -566,8 +564,9 @@ class MainWidget(QWidget):
         return group
 
     def _build_task_group(self) -> QGroupBox:
-        group = self._step_group("Choose the SAM3 task")
-        layout = QFormLayout()
+        group = self._step_group("Choose the SAM3 task and target image")
+        layout = QVBoxLayout()
+        task_layout = QFormLayout()
 
         self.task_combo = QComboBox()
         self.task_combo.addItem("2D segmentation", Sam3Task.SEGMENT_2D)
@@ -576,6 +575,31 @@ class MainWidget(QWidget):
         self.task_combo.addItem("Text segmentation", Sam3Task.TEXT)
         self.task_combo.addItem("Refinement (live point correction)", Sam3Task.REFINE)
         self.task_combo.currentIndexChanged.connect(self._on_task_changed)
+
+        self.image_layer_combo = QComboBox()
+        self.batch_all_images_check = QCheckBox("Batch all image layers")
+        self.batch_all_images_check.setToolTip(
+            "Run the current prompt setup on every napari Image layer. "
+            "Each image gets its own SAM3 preview output layers."
+        )
+
+        self.large_image_check = QCheckBox("Enable large-image local inference")
+        self.large_image_check.setChecked(False)
+        self.large_image_check.setToolTip(
+            "When enabled, SAM3 runs only on a local XY ROI around point/box prompts "
+            "and writes the result back into global image coordinates."
+        )
+        self.large_image_check.toggled.connect(self._on_large_image_mode_changed)
+
+        self.roi_size_combo = QComboBox()
+        self.roi_size_combo.addItem("512 x 512", (512, 512))
+        self.roi_size_combo.addItem("1024 x 1024", (1024, 1024))
+        self.roi_size_combo.addItem("2048 x 2048", (2048, 2048))
+        self.roi_size_combo.addItem("4096 x 4096", (4096, 4096))
+        self.roi_size_combo.addItem("8192 x 8192", (8192, 8192))
+        self.roi_size_combo.setCurrentIndex(1)
+        self.roi_size_combo.setEnabled(False)
+        self.roi_size_combo.currentIndexChanged.connect(self._on_large_image_mode_changed)
 
         self.channel_axis_spin = QSpinBox()
         self.channel_axis_spin.setRange(-1, 8)
@@ -597,65 +621,62 @@ class MainWidget(QWidget):
         )
         self.confidence_threshold_spin.valueChanged.connect(lambda _value: self._save_settings())
 
-        self.large_image_check = QCheckBox("Enable large-image local inference")
-        self.large_image_check.setChecked(False)
-        self.large_image_check.setToolTip(
-            "When enabled, SAM3 runs only on a local XY ROI around point/box prompts "
-            "and writes the result back into global image coordinates."
-        )
-        self.large_image_check.toggled.connect(self._on_large_image_mode_changed)
-
-        self.roi_size_combo = QComboBox()
-        self.roi_size_combo.addItem("512 x 512", (512, 512))
-        self.roi_size_combo.addItem("1024 x 1024", (1024, 1024))
-        self.roi_size_combo.addItem("2048 x 2048", (2048, 2048))
-        self.roi_size_combo.addItem("4096 x 4096", (4096, 4096))
-        self.roi_size_combo.addItem("8192 x 8192", (8192, 8192))
-        self.roi_size_combo.setCurrentIndex(1)
-        self.roi_size_combo.setEnabled(False)
-        self.roi_size_combo.currentIndexChanged.connect(self._on_large_image_mode_changed)
-
         self.propagation_direction_combo = QComboBox()
         self.propagation_direction_combo.addItems(["both", "forward", "backward"])
 
-        layout.addRow("Task", self.task_combo)
-        layout.addRow("Channel axis (-1 auto/no channel)", self.channel_axis_spin)
+        task_layout.addRow("Task", self.task_combo)
+        task_layout.addRow("Target image", self.image_layer_combo)
+        task_layout.addRow("", self.batch_all_images_check)
+        task_layout.addRow("", self.large_image_check)
+        task_layout.addRow("ROI size", self.roi_size_combo)
+
+        advanced_content = QWidget()
+        advanced_layout = QFormLayout()
+        advanced_note = QLabel(
+            "Only change these if your image layout or detection behavior needs manual tuning."
+        )
+        advanced_note.setWordWrap(True)
+        advanced_note.setStyleSheet("color: #9aa7b6; font-size: 11px;")
+
+        advanced_layout.addRow("", advanced_note)
+        advanced_layout.addRow("Channel axis", self.channel_axis_spin)
         hint = QLabel("Leave -1 unless your image has an explicit channel dimension.")
         hint.setToolTip(channel_axis_tip)
-        layout.addRow("", hint)
-        layout.addRow("Detection threshold", self.confidence_threshold_spin)
-        layout.addRow("", self.large_image_check)
-        layout.addRow("Local ROI size", self.roi_size_combo)
-        layout.addRow("3D direction", self.propagation_direction_combo)
+        advanced_layout.addRow("", hint)
+        advanced_layout.addRow("Detection threshold", self.confidence_threshold_spin)
+        advanced_layout.addRow("3D direction", self.propagation_direction_combo)
+        advanced_content.setLayout(advanced_layout)
+
+        self._task_setup_form = task_layout
+        self._roi_size_row_label = task_layout.labelForField(self.roi_size_combo)
+        self._propagation_direction_row_label = advanced_layout.labelForField(
+            self.propagation_direction_combo
+        )
+
+        layout.addLayout(task_layout)
+        layout.addWidget(CollapsiblePanel("Advanced", advanced_content, collapsed=True))
         group.setLayout(layout)
+        self._sync_task_setup_visibility()
         return group
 
-    def _build_layers_group(self) -> QGroupBox:
-        group = self._step_group("Review detected napari layers")
+    def _build_prompt_layer_selector_group(self) -> QWidget:
+        container = QWidget()
         layout = QFormLayout()
 
-        self.image_layer_combo = QComboBox()
         self.points_layer_combo = QComboBox()
         self.points_layer_combo.currentIndexChanged.connect(self._on_points_layer_changed)
         self.shapes_layer_combo = QComboBox()
         self.labels_layer_combo = QComboBox()
-        self.batch_all_images_check = QCheckBox("Batch all image layers")
-        self.batch_all_images_check.setToolTip(
-            "Run the current prompt setup on every napari Image layer. "
-            "Each image gets its own SAM3 preview output layers."
-        )
 
         refresh_btn = QPushButton("Refresh Layers")
         refresh_btn.clicked.connect(self._refresh_layers)
 
-        layout.addRow("Image", self.image_layer_combo)
-        layout.addRow("", self.batch_all_images_check)
         layout.addRow("Points", self.points_layer_combo)
         layout.addRow("Shapes", self.shapes_layer_combo)
         layout.addRow("Labels", self.labels_layer_combo)
         layout.addRow(refresh_btn)
-        group.setLayout(layout)
-        return group
+        container.setLayout(layout)
+        return container
 
     def _build_prompt_group(self) -> QGroupBox:
         group = self._step_group("Guide SAM3 with prompts")
@@ -708,8 +729,8 @@ class MainWidget(QWidget):
         )
         self.multi_text_prompt_edit.setMaximumHeight(78)
         self.multi_text_run_shortcut = QShortcut(
-        QKeySequence("Ctrl+Return"),
-        self.multi_text_prompt_edit,
+            QKeySequence("Ctrl+Return"),
+            self.multi_text_prompt_edit,
         )
         self.multi_text_run_shortcut.activated.connect(self._run_current_task)
 
@@ -730,6 +751,13 @@ class MainWidget(QWidget):
         layout.addRow(apply_polarity_btn)
         layout.addRow("Text prompt", self.text_prompt_edit)
         layout.addRow("Batch text prompts", self.multi_text_prompt_edit)
+        layout.addRow(
+            CollapsiblePanel(
+                "Prompt Layers",
+                self._build_prompt_layer_selector_group(),
+                collapsed=True,
+            )
+        )
         layout.addRow(clear_btn)
         group.setLayout(layout)
         return group
@@ -904,7 +932,7 @@ class MainWidget(QWidget):
     def _on_task_changed(self) -> None:
         task = self._current_task()
         is_video = task == Sam3Task.SEGMENT_3D
-        self.propagation_direction_combo.setEnabled(is_video)
+        self._sync_task_setup_visibility()
         self.propagate_btn.setEnabled(is_video and self._worker is None)
         if task == Sam3Task.TEXT:
             self.prompt_tool_combo.setCurrentIndex(self.prompt_tool_combo.findData(PROMPT_TEXT))
@@ -917,6 +945,25 @@ class MainWidget(QWidget):
         if hasattr(self, "live_point_refinement"):
             self._sync_live_refinement_layer()
 
+
+    def _sync_task_setup_visibility(self) -> None:
+        if not hasattr(self, "roi_size_combo") or not hasattr(self, "propagation_direction_combo"):
+            return
+
+        large_image_enabled = self._large_image_mode_enabled()
+        self.roi_size_combo.setEnabled(large_image_enabled)
+        self.roi_size_combo.setVisible(large_image_enabled)
+        if hasattr(self, "_roi_size_row_label") and self._roi_size_row_label is not None:
+            self._roi_size_row_label.setVisible(large_image_enabled)
+
+        is_video = self._current_task() == Sam3Task.SEGMENT_3D
+        self.propagation_direction_combo.setEnabled(is_video)
+        self.propagation_direction_combo.setVisible(is_video)
+        if (
+            hasattr(self, "_propagation_direction_row_label")
+            and self._propagation_direction_row_label is not None
+        ):
+            self._propagation_direction_row_label.setVisible(is_video)
 
 
     def _sync_model_type_controls(self) -> None:
@@ -1397,7 +1444,7 @@ class MainWidget(QWidget):
 
     def _on_large_image_mode_changed(self, *_args: Any) -> None:
         enabled = self._large_image_mode_enabled()
-        self.roi_size_combo.setEnabled(enabled)
+        self._sync_task_setup_visibility()
         if enabled:
             width, height = self._selected_roi_size()
             self._log(f"Large-image mode ON: local ROI inference ({width} x {height}).")
