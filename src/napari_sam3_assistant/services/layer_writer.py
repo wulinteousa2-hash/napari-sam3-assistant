@@ -47,6 +47,10 @@ class LayerWriter:
         if layer is None:
             data = np.zeros(output_shape, dtype=np.uint32)
             layer = self.viewer.add_labels(data, name=labels_name)
+        existing = np.asarray(layer.data[result.frame_index])
+        incoming = np.asarray(result.labels)
+        if existing.any() and not incoming.any():
+            return
         layer.data[result.frame_index] = result.labels
         layer.refresh()
 
