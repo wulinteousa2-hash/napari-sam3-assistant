@@ -17,6 +17,9 @@ from ..core.coordinates import CoordinateMapper, extract_2d_image, to_rgb_uint8
 from ..core.models import PromptBundle, PromptPolarity, Sam3Result, Sam3Session, Sam3Task
 
 
+MAX_VIDEO_POINT_PROMPTS = 16
+
+
 @dataclass
 class Sam3AdapterConfig:
     checkpoint_path: Path | None = None
@@ -271,6 +274,12 @@ class Sam3Adapter:
             "session_id": session.session_id,
             "frame_index": frame_index,
         }
+        if bundle.masks:
+            raise RuntimeError(
+                "Labels-mask prompts are not supported by the SAM3 video predictor "
+                "API used for 3D/video propagation. Use a box or point prompt on the "
+                "selected frame, or run labels-mask prompting as a 2D image task."
+            )
         if bundle.text and bundle.text.text:
             request["text"] = bundle.text.text
 
@@ -280,18 +289,47 @@ class Sam3Adapter:
                 "frame. Use one Shapes ROI, or run image exemplar mode for multiple "
                 "exemplars."
             )
+        if self._model_version() == "sam3" and bundle.boxes and len(bundle.boxes) > 1:
+            raise RuntimeError(
+                "SAM3.0 3D/video propagation supports one initial visual box per "
+                "prompted frame. Use one box, or switch to SAM3.1 video multiplex for "
+                "multi-box video prompts."
+            )
+
+        mapper = CoordinateMapper(bundle.image)
+        height = bundle.image.data_shape[bundle.image.spatial_axes[0]]
+        width = bundle.image.data_shape[bundle.image.spatial_axes[1]]
 
         if bundle.points:
-            request["points"] = [point.xy for point in bundle.points]
+            if len(bundle.points) > MAX_VIDEO_POINT_PROMPTS:
+                raise RuntimeError(
+                    "SAM3 video point prompts support up to "
+                    f"{MAX_VIDEO_POINT_PROMPTS} points per request. Use fewer points "
+                    "or split corrections into separate runs."
+                )
+            if (bundle.text and bundle.text.text) or bundle.boxes:
+                raise RuntimeError(
+                    "SAM3 video point prompts cannot be combined with text or box prompts "
+                    "in one request. Use points alone for tracker refinement, or run a "
+                    "separate text/box 3D prompt."
+                )
+            object_ids = {point.object_id for point in bundle.points if point.object_id is not None}
+            if len(object_ids) > 1:
+                raise RuntimeError(
+                    "SAM3 video point prompts in one request must target one object id."
+                )
+            request["obj_id"] = next(iter(object_ids), 1)
+            request["points"] = [
+                mapper.point_to_normalized_xy(point.y, point.x, (height, width))
+                for point in bundle.points
+            ]
             request["point_labels"] = [
                 1 if point.polarity == PromptPolarity.POSITIVE else 0
                 for point in bundle.points
             ]
+            self._ensure_video_prompt_frame_cache(session.session_id, frame_index)
 
         if bundle.boxes:
-            mapper = CoordinateMapper(bundle.image)
-            height = bundle.image.data_shape[bundle.image.spatial_axes[0]]
-            width = bundle.image.data_shape[bundle.image.spatial_axes[1]]
             request["bounding_boxes"] = [
                 mapper.box_to_normalized_xywh(box, (height, width))
                 for box in bundle.boxes
@@ -303,6 +341,25 @@ class Sam3Adapter:
         with self._inference_context():
             response = self.video_predictor.handle_request(request)
         return self._result_from_video_output(bundle, response, session.session_id)
+
+    def _ensure_video_prompt_frame_cache(self, session_id: str, frame_index: int) -> None:
+        sessions = getattr(self.video_predictor, "_all_inference_states", None)
+        if not isinstance(sessions, dict):
+            return
+        session = sessions.get(session_id)
+        if not isinstance(session, dict):
+            return
+        state = session.get("state")
+        if not isinstance(state, dict):
+            return
+        cache = state.setdefault("cached_frame_outputs", {})
+        if isinstance(cache, dict):
+            num_frames = int(state.get("num_frames") or 0)
+            if num_frames > 0:
+                for idx in range(num_frames):
+                    cache.setdefault(idx, {})
+            else:
+                cache.setdefault(frame_index, {})
 
     def propagate_video(
         self,

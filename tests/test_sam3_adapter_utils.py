@@ -7,6 +7,17 @@ import torch
 
 import napari_sam3_assistant.adapters.sam3_backend as backend
 from napari_sam3_assistant.adapters import Sam3Adapter, Sam3AdapterConfig
+from napari_sam3_assistant.core.coordinates import infer_image_selection
+from napari_sam3_assistant.core.models import (
+    BoxPrompt,
+    PointPrompt,
+    PromptBundle,
+    PromptPolarity,
+    MaskPrompt,
+    Sam3Session,
+    Sam3Task,
+    TextPrompt,
+)
 
 
 def test_to_numpy_casts_bfloat16_to_float32_before_numpy_conversion():
@@ -186,3 +197,211 @@ def test_sam31_checkpoint_rejects_current_2d_image_loader():
         assert "SAM3.1 multiplex checkpoints are supported for 3D/video" in str(error)
     else:
         raise AssertionError("Expected SAM3.1 image loading to fail clearly")
+
+
+def test_video_point_prompt_request_uses_normalized_points_and_object_id():
+    requests = []
+
+    class Predictor:
+        _all_inference_states = {
+            "session-1": {
+                "state": {
+                    "num_frames": 3,
+                    "cached_frame_outputs": {},
+                },
+            },
+        }
+
+        def handle_request(self, request):
+            requests.append(request)
+            return {
+                "frame_index": request["frame_index"],
+                "outputs": {
+                    "out_binary_masks": np.zeros((0, 10, 20), dtype=bool),
+                    "out_obj_ids": np.asarray([], dtype=np.int64),
+                    "out_boxes_xywh": np.zeros((0, 4), dtype=np.float32),
+                },
+            }
+
+    selection = infer_image_selection("stack", (3, 10, 20), dims_current_step=(1, 0, 0))
+    bundle = PromptBundle(
+        task=Sam3Task.SEGMENT_3D,
+        image=selection,
+        points=[
+            PointPrompt(y=2, x=4, polarity=PromptPolarity.POSITIVE),
+            PointPrompt(y=8, x=10, polarity=PromptPolarity.NEGATIVE),
+        ],
+    )
+    session = Sam3Session(task=Sam3Task.SEGMENT_3D, image=selection, session_id="session-1")
+    adapter = Sam3Adapter()
+    adapter.video_predictor = Predictor()
+
+    adapter.add_video_prompt(bundle, session)
+
+    assert adapter.video_predictor._all_inference_states["session-1"]["state"][
+        "cached_frame_outputs"
+    ] == {0: {}, 1: {}, 2: {}}
+    assert requests == [
+        {
+            "type": "add_prompt",
+            "session_id": "session-1",
+            "frame_index": 1,
+            "obj_id": 1,
+            "points": [(0.2, 0.2), (0.5, 0.8)],
+            "point_labels": [1, 0],
+        }
+    ]
+
+
+def test_video_point_prompt_uses_explicit_single_object_id():
+    requests = []
+
+    class Predictor:
+        def handle_request(self, request):
+            requests.append(request)
+            return {"frame_index": 0, "outputs": {}}
+
+    selection = infer_image_selection("stack", (3, 10, 20))
+    bundle = PromptBundle(
+        task=Sam3Task.SEGMENT_3D,
+        image=selection,
+        points=[PointPrompt(y=2, x=4, object_id=7)],
+    )
+    session = Sam3Session(task=Sam3Task.SEGMENT_3D, image=selection, session_id="session-1")
+    adapter = Sam3Adapter()
+    adapter.video_predictor = Predictor()
+
+    adapter.add_video_prompt(bundle, session)
+
+    assert requests[0]["obj_id"] == 7
+
+
+def test_video_point_prompt_rejects_mixed_text_or_box_prompt():
+    selection = infer_image_selection("stack", (3, 10, 20))
+    session = Sam3Session(task=Sam3Task.SEGMENT_3D, image=selection, session_id="session-1")
+    adapter = Sam3Adapter()
+    adapter.video_predictor = object()
+    bundle = PromptBundle(
+        task=Sam3Task.SEGMENT_3D,
+        image=selection,
+        points=[PointPrompt(y=2, x=4)],
+        boxes=[BoxPrompt(y0=1, x0=2, y1=3, x1=4)],
+        text=TextPrompt("cell"),
+    )
+
+    try:
+        adapter.add_video_prompt(bundle, session)
+    except RuntimeError as error:
+        assert "cannot be combined with text or box prompts" in str(error)
+    else:
+        raise AssertionError("Expected mixed video point prompts to fail clearly")
+
+
+def test_video_prompt_rejects_labels_mask_prompt():
+    selection = infer_image_selection("stack", (3, 10, 20))
+    session = Sam3Session(task=Sam3Task.SEGMENT_3D, image=selection, session_id="session-1")
+    adapter = Sam3Adapter()
+    adapter.video_predictor = object()
+    bundle = PromptBundle(
+        task=Sam3Task.SEGMENT_3D,
+        image=selection,
+        masks=[MaskPrompt(mask=np.ones((10, 20), dtype=bool))],
+    )
+
+    try:
+        adapter.add_video_prompt(bundle, session)
+    except RuntimeError as error:
+        assert "Labels-mask prompts are not supported" in str(error)
+    else:
+        raise AssertionError("Expected labels-mask video prompt to fail clearly")
+
+
+def test_video_point_prompt_rejects_more_than_sixteen_points():
+    selection = infer_image_selection("stack", (3, 10, 20))
+    session = Sam3Session(task=Sam3Task.SEGMENT_3D, image=selection, session_id="session-1")
+    adapter = Sam3Adapter()
+    adapter.video_predictor = object()
+    bundle = PromptBundle(
+        task=Sam3Task.SEGMENT_3D,
+        image=selection,
+        points=[PointPrompt(y=index, x=index) for index in range(17)],
+    )
+
+    try:
+        adapter.add_video_prompt(bundle, session)
+    except RuntimeError as error:
+        assert "up to 16 points" in str(error)
+    else:
+        raise AssertionError("Expected more than sixteen video points to fail clearly")
+
+
+def test_video_point_prompt_rejects_multiple_object_ids():
+    selection = infer_image_selection("stack", (3, 10, 20))
+    session = Sam3Session(task=Sam3Task.SEGMENT_3D, image=selection, session_id="session-1")
+    adapter = Sam3Adapter()
+    adapter.video_predictor = object()
+    bundle = PromptBundle(
+        task=Sam3Task.SEGMENT_3D,
+        image=selection,
+        points=[PointPrompt(y=2, x=4, object_id=7), PointPrompt(y=3, x=5, object_id=8)],
+    )
+
+    try:
+        adapter.add_video_prompt(bundle, session)
+    except RuntimeError as error:
+        assert "must target one object id" in str(error)
+    else:
+        raise AssertionError("Expected multiple object ids to fail clearly")
+
+
+def test_sam30_video_box_prompt_rejects_multiple_initial_boxes():
+    selection = infer_image_selection("stack", (3, 10, 20))
+    session = Sam3Session(task=Sam3Task.SEGMENT_3D, image=selection, session_id="session-1")
+    adapter = Sam3Adapter()
+    adapter.video_predictor = object()
+    bundle = PromptBundle(
+        task=Sam3Task.SEGMENT_3D,
+        image=selection,
+        boxes=[
+            BoxPrompt(y0=1, x0=2, y1=3, x1=4),
+            BoxPrompt(y0=5, x0=6, y1=7, x1=8),
+        ],
+    )
+
+    try:
+        adapter.add_video_prompt(bundle, session)
+    except RuntimeError as error:
+        assert "SAM3.0 3D/video propagation supports one initial visual box" in str(error)
+    else:
+        raise AssertionError("Expected multiple SAM3.0 video boxes to fail clearly")
+
+
+def test_sam31_video_box_prompt_allows_multiple_boxes():
+    requests = []
+
+    class Predictor:
+        def handle_request(self, request):
+            requests.append(request)
+            return {"frame_index": 0, "outputs": {}}
+
+    selection = infer_image_selection("stack", (3, 10, 20))
+    session = Sam3Session(task=Sam3Task.SEGMENT_3D, image=selection, session_id="session-1")
+    adapter = Sam3Adapter(
+        Sam3AdapterConfig(checkpoint_path=Path("/models/sam3.1_multiplex.pt"))
+    )
+    adapter.video_predictor = Predictor()
+    bundle = PromptBundle(
+        task=Sam3Task.SEGMENT_3D,
+        image=selection,
+        boxes=[
+            BoxPrompt(y0=1, x0=2, y1=3, x1=4),
+            BoxPrompt(y0=5, x0=6, y1=7, x1=8),
+        ],
+    )
+
+    adapter.add_video_prompt(bundle, session)
+
+    assert requests[0]["bounding_boxes"] == [
+        (0.1, 0.1, 0.1, 0.2),
+        (0.3, 0.5, 0.1, 0.2),
+    ]

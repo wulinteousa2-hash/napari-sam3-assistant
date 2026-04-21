@@ -80,6 +80,14 @@ def test_box_coordinate_formats_match_sam3_image_and_video_expectations():
     assert mapper.box_to_normalized_xywh(box, (100, 200)) == (0.1, 0.1, 0.2, 0.2)
 
 
+def test_point_coordinate_format_matches_sam3_video_expectations():
+    selection = infer_image_selection("image", (100, 200))
+    mapper = CoordinateMapper(selection)
+
+    assert mapper.point_to_normalized_xy(25, 50, (100, 200)) == (0.25, 0.25)
+    assert mapper.point_to_normalized_xy(-1, 250, (100, 200)) == (1.0, 0.0)
+
+
 def test_to_rgb_uint8_converts_float_grayscale():
     image = np.asarray([[0.0, 0.5], [1.0, 2.0]], dtype=np.float32)
 

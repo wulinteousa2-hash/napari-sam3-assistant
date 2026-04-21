@@ -1898,7 +1898,11 @@ class MainWidget(QWidget):
                 "Use T for next point mode; Shift+T flips selected/latest point and reruns."
             )
         if task == Sam3Task.SEGMENT_3D:
-            return "3D/video: select the frame/slice, add prompts there, then run preview or propagate."
+            return (
+                "3D/video: select the frame/slice, then use one SAM3.0 box, SAM3.1 "
+                "box prompts, or up to 16 points for one object before propagating. "
+                "Labels-mask prompts are 2D only."
+            )
         return "2D segmentation: use text, points, boxes, or a labels-mask prompt, then run preview."
 
     def _select_combo_data(self, combo: QComboBox, value: str) -> None:

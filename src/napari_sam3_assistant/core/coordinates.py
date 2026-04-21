@@ -14,6 +14,18 @@ class CoordinateMapper:
     def point_to_xy(self, y: float, x: float) -> tuple[float, float]:
         return (float(x), float(y))
 
+    def point_to_normalized_xy(
+        self,
+        y: float,
+        x: float,
+        image_hw: tuple[int, int],
+    ) -> tuple[float, float]:
+        """Return normalized x, y coordinates for video SAM3 point prompts."""
+        height, width = image_hw
+        normalized_x = np.clip(float(x), 0, width) / width
+        normalized_y = np.clip(float(y), 0, height) / height
+        return (float(normalized_x), float(normalized_y))
+
     def box_to_xyxy(self, box: BoxPrompt) -> tuple[float, float, float, float]:
         y0, y1 = sorted((float(box.y0), float(box.y1)))
         x0, x1 = sorted((float(box.x0), float(box.x1)))
