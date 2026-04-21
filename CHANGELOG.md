@@ -2,6 +2,14 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 3.3.0
+
+### Fixed
+
+- Fixed 3D/video box-only prompts so they initialize tracker propagation instead of only producing a mask on the prompted frame.
+- Preserved non-empty prompted-frame masks when later 3D/video updates for the same frame are empty.
+- Kept text-plus-box 3D/video prompts on the semantic box request path while routing box-only prompts through tracker box points.
+
 ## 3.2.0
 
 ### Changed
