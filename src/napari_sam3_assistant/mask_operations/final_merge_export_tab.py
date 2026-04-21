@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Callable
 
+import numpy as np
 from qtpy.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -68,6 +69,39 @@ class FinalMergeExportTab(QWidget):
         except ValueError as exc:
             self._log(str(exc))
 
+    def show_overlap_map(self) -> None:
+        names = [item.data(256) for item in self.layer_list.selectedItems()]
+        layers = [safe_get_layer(self.viewer, name) for name in names]
+        layers = [layer for layer in layers if layer is not None]
+        if len(layers) < 2:
+            self._log("Select at least two label layers to show overlap.")
+            return
+        shape = np.asarray(layers[0].data).shape
+        counts = np.zeros(shape, dtype=np.uint16)
+        for layer in layers:
+            data = np.asarray(layer.data)
+            if data.shape != shape:
+                self._log(
+                    f"Layer shape mismatch: {layer.name} has {data.shape}, expected {shape}."
+                )
+                return
+            counts += data != 0
+        overlap = np.where(counts > 1, counts, 0).astype(np.uint16)
+        if not overlap.any():
+            self._log("No overlap found in the selected label layers.")
+            return
+        name = unique_layer_name(self.viewer, "SAM3 overlap map")
+        self.viewer.add_labels(
+            overlap,
+            name=name,
+            metadata={
+                "sam3_role": "overlap_map",
+                "source_layers": names,
+            },
+        )
+        self._log(f"Created overlap map '{name}' from {len(layers)} layer(s).")
+        self._refresh_all()
+
     def export_current_output(self) -> None:
         layer = safe_get_layer(self.viewer, self.output_name_edit.text().strip())
         if layer is None:
@@ -112,6 +146,8 @@ class FinalMergeExportTab(QWidget):
         path_row.addWidget(browse_btn)
         merge_btn = QPushButton("Merge Saved Objects")
         merge_btn.clicked.connect(lambda: self._run_with_log_errors(self.merge_saved_objects))
+        overlap_btn = QPushButton("Show Overlap Map")
+        overlap_btn.clicked.connect(self.show_overlap_map)
         merge_export_btn = QPushButton("Merge and Export")
         merge_export_btn.clicked.connect(self.merge_and_export)
         export_btn = QPushButton("Export Output")
@@ -120,6 +156,7 @@ class FinalMergeExportTab(QWidget):
         refresh_btn.clicked.connect(self.refresh)
         actions = QHBoxLayout()
         actions.addWidget(merge_btn)
+        actions.addWidget(overlap_btn)
         actions.addWidget(merge_export_btn)
         actions.addWidget(export_btn)
         actions.addWidget(refresh_btn)

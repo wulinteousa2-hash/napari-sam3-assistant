@@ -3,7 +3,7 @@
 ![napari-sam3-assistant UI](docs/ui.png)
 
 
-`napari-sam3-assistant` is a napari plugin for interactive Segment Anything Model 3 (SAM3) segmentation using text, points, boxes, exemplar prompts, large-image ROI inference, point-based refinement, mask operations, and 3D/video-like propagation.
+`napari-sam3-assistant` is a napari plugin for Segment Anything Model 3 (SAM3) image segmentation. Version 4 adds a two-mode interface: `Simple` for guided image segmentation and `Advanced` for the original full Step 1 to Step 6 workflow.
 
 The plugin focuses on task-based segmentation workflows:
 
@@ -12,14 +12,28 @@ The plugin focuses on task-based segmentation workflows:
 - exemplar segmentation from Shapes ROI boxes
 - text-based concept segmentation
 - large OME-Zarr and TIFF segmentation through local ROI inference
-- refinement with positive and negative point prompts
+- Live Points with positive and negative prompts
 - downstream mask cleanup, merge, and export operations
+
+## What's New in 4.0.0
+
+Version 4.0.0 is a workflow release focused on the new Simple mode and a cleaner Advanced mode.
+
+- New `Simple` mode for common imaging tasks with a compact one-column layout.
+- `Advanced` mode keeps the full manual UI for model setup, batch work, large-image ROI settings, result tables, mask operations, and detailed logs.
+- The mode selector stays visible, so users can move between Simple and Advanced without restarting napari.
+- Simple mode uses the same SAM3 execution path and writes the same napari preview layers as Advanced mode.
+- Simple mode keeps common tasks short: choose the image/task, add or enter the prompt, then run preview.
+- Simple mode includes `Mask Ops` in the Run area to open the standalone mask cleanup widget for preview labels.
+- Simple mode uses SAM3.0 for 2D image tasks so Advanced SAM3.1 video-model settings do not break Simple image segmentation.
+- Device selection is explicit: choose `GPU` or `CPU`; there is no automatic device mode in the Simple workflow.
+- Live Points are still available with `T` for next point mode and `Shift+T` to flip selected or latest points.
 
 SAM 3 is not bundled with this plugin. Install the SAM 3 backend and download the SAM 3 model files separately from Meta's Hugging Face repository.
 
 ## Status
 
-This project is under active development. The current widget supports local SAM 3 model loading, napari prompt collection, large-image ROI execution, downstream mask operations, background execution, and writing results back to napari layers.
+This project is under active development. The current widget supports local SAM 3 model loading, napari prompt collection, Simple and Advanced UI modes, large-image ROI execution, downstream mask operations, background execution, and writing results back to napari layers.
 
 ## Changelog
 
@@ -195,14 +209,47 @@ python -m pip install -e .
 
 ## Basic Workflow
 
+### Simple Mode
+
+Use `Simple` when you want a guided image-segmentation workflow with fewer controls on screen.
+
+The main flow is:
+
+1. Select an image and choose the task.
+2. Add the prompt.
+3. Click `Run Preview`.
+
+Simple mode is intended for common imaging tasks:
+
+- `2D`: points, boxes, labels-mask, or text prompts on the selected image plane
+- `Text`: enter a short imaging concept such as `cell`, `nucleus`, or `myelin`
+- `Refine`: use Live Points to add positive or negative point corrections
+- `Exemplar`: draw one or more boxes around example objects
+- `3D/Video`: start propagation from a prompt on the selected frame or slice when the current data and model support it
+
+Simple mode keeps model setup small:
+
+- model folder
+- `GPU` or `CPU`
+- SAM3.0 for Simple image tasks
+
+Use `Advanced` when you need SAM3.1 model selection, batch processing, large-image ROI controls, detailed result tables, or CSV export.
+
+After a Simple preview creates labels, click `Mask Ops` in the Run area to open `SAM3 Mask Operations` on the cleanup tab.
+
+### Advanced Mode
+
+`Advanced` is the original full workflow. It keeps the Step 1 to Step 6 layout for users who want manual control.
+
 1. Open an image in napari.
 2. Open `Plugins > SAM3 Assistant`.
-3. Select the image in `Layers > Image`.
-4. Select a task.
-5. Create a prompt layer if the task needs one.
-6. Click `Run Preview`.
-7. Inspect `SAM3 preview labels`, `SAM3 preview masks`, or `SAM3 preview boxes`.
-8. Click `Save Result as Labels` to keep the result.
+3. Choose `Advanced`.
+4. Select the image in `Target image`.
+5. Select a task.
+6. Create a prompt layer if the task needs one.
+7. Click `Run Preview`.
+8. Inspect `SAM3 preview labels`, `SAM3 preview masks`, or `SAM3 preview boxes`.
+9. Open `SAM3 Mask Operations` if you want to save accepted objects, clean masks, merge classes, or export masks.
 
 Use `Clear Preview` to remove generated preview layers without deleting prompts or saved labels.
 
@@ -215,7 +262,7 @@ Use this mode for OME-Zarr, large TIFF, and similar large images where sending t
 Workflow:
 
 1. Set up the normal task and prompt type.
-2. Enable `Enable large-image local inference` in `Step 2. Task`.
+2. Enable `Enable large-image local inference` in Advanced task setup.
 3. Choose a local ROI size:
 
 ```text
@@ -227,13 +274,13 @@ Workflow:
 ```
 
 4. Add a point or box prompt.
-5. Click `Run Preview`, or add points in live refinement mode.
+5. Click `Run Preview`, or add points in Live Points mode.
 
 ROI behavior:
 
 - Point prompts use the latest point as the ROI anchor.
 - Box prompts use the box center and keep the box inside the local inference window when possible.
-- Refinement uses the latest point as the ROI anchor.
+- Live Points use the latest point as the ROI anchor.
 - Text-only prompts keep the full-image path in this first pass unless a point or box anchor is also available.
 - If a new point or box stays inside the current ROI, the same ROI is reused.
 - If a new point or box falls outside the current ROI, the ROI is rebuilt around the new prompt.
@@ -263,7 +310,7 @@ Workflow:
 1. Open multiple images in napari.
 2. Configure a 2D task such as text, box, exemplar, or labels-mask segmentation.
 3. Add the prompt once.
-4. Enable `Batch all image layers` in `Step 3. Layers`.
+4. Enable `Batch all image layers` in `Advanced`.
 5. Click `Run Preview`.
 
 Each source image gets its own output layers:
@@ -274,13 +321,9 @@ SAM3 preview masks [image name]
 SAM3 preview boxes [image name]
 ```
 
-`Save Result as Labels` saves each batch preview labels layer separately:
+Batch preview layers can be reviewed directly or used in Mask Operations.
 
-```text
-SAM3 saved labels [image name]
-```
-
-Batch mode is intended for 2D image tasks. It is disabled for live refinement and 3D/video propagation because those workflows depend on one active image/session.
+Batch mode is intended for 2D image tasks. It is disabled for Live Points and 3D/video propagation because those workflows depend on one active image/session.
 
 ### Multi-Text Batch Mode
 
@@ -370,13 +413,13 @@ The local SAM 3 image API exposes visual exemplars through geometric box prompts
 
 `Exemplar segmentation` is a 2D/image task in this plugin. For exemplar-like 3D propagation, use `3D/video propagation` with a box prompt on the selected frame or slice.
 
-### Refinement With Positive and Negative Points
+### Live Points With Positive and Negative Points
 
 Use points to correct a result.
 
 Workflow:
 
-1. Set `Task` to `Refinement (live point correction)`.
+1. Set `Task` to `Live Points`.
 2. Set `Prompt type` to `Points (positive/negative)`.
 3. Click `Create Prompt Layer`.
 4. Choose `Positive` and add points on regions to include.
@@ -492,9 +535,9 @@ Buttons:
 - `Load 3D/Video Model`: load the video propagation model.
 - `Run Preview`: run the selected task.
 - `Clear Preview`: remove generated preview layers only.
-- `Save Result as Labels`: copy preview labels into saved labels.
 - `Cancel`: stop a running worker.
 - `Unload`: unload the SAM3 model from memory.
+- `Save Accepted Object`: save a preview label object in Mask Operations.
 
 Results table:
 
@@ -526,9 +569,9 @@ New value: 3
 
 Then click `Merge Label Values`. The selected Labels layer is updated in place.
 
-## Step 7 Mask Operations
+## Mask Operations
 
-Step 7 provides downstream mask operations for turning SAM3 previews into curated masks for analysis or training data.
+`SAM3 Mask Operations` is a separate napari widget for turning SAM3 previews into curated masks for analysis or training data. Open it from the plugin menu or from the `Mask Ops` button in Simple mode. When opened from `Mask Ops`, it starts as a floating tool window.
 
 Tabs:
 
@@ -538,6 +581,20 @@ Tabs:
 - `Final Merge / Export`: merge cleaned class masks into semantic, instance, or binary final masks, choose overlap handling, and export TIFF, PNG, or NumPy `.npy` files.
 
 The mask operations panel works on napari Labels layers, including SAM3 preview and saved label layers.
+
+Mouse-assisted cleanup:
+
+- In `Mask Cleanup`, enable `Right-click Delete`.
+- Right-click a label object in the selected target Labels layer to remove that label value.
+- Click `Undo Last Edit` to restore the previous mask state for the selected Labels layer.
+- Double-click a component table row to jump the viewer to that mask component.
+- This is useful for supervised cleanup after SAM3 creates a preview mask.
+
+Overlap inspection:
+
+- In `Final Merge / Export`, select two or more class mask layers.
+- Click `Show Overlap Map`.
+- The plugin creates `SAM3 overlap map`, where non-zero pixels mark locations covered by more than one selected class mask.
 
 ## ARM64, CUDA, and DGX Spark
 

@@ -2,6 +2,44 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.0.0
+
+Major UI update for image-segmentation workflows.
+
+### Added
+
+- Added a persistent `Simple` / `Advanced` mode selector.
+- Added `Simple` mode for common imaging tasks with fewer controls on screen.
+- Added guided Simple panels for image selection, task choice, prompt setup, run actions, shared status, and compact result summary.
+- Added shared task routing so Simple and Advanced use the same SAM3 execution path.
+- Added shared result-visibility state so both modes can respond to preview, label, and video-session results.
+- Added shared activity status for `Ready`, model loading, preview running, 3D propagation, no objects found, and task failure states.
+- Added automatic image-layer refresh in Simple mode when users select or drop image layers in napari.
+- Added `SAM3 Mask Operations` as a standalone napari widget for cleanup, merge, and export.
+- Added a Simple `Mask Ops` run action that opens the standalone Mask Operations cleanup widget.
+- Added opt-in right-click removal for clicked label values in Mask Cleanup.
+- Added `Undo Last Edit` history for Mask Cleanup edits on the selected Labels layer.
+- Added double-click component-table navigation in Mask Cleanup to jump the viewer to a mask centroid.
+- Added an overlap-map preview action for selected class masks before final merge/export.
+
+### Changed
+
+- `Advanced` keeps the full manual workflow for model setup, batch work, large-image ROI controls, results tables, and logs.
+- Mask Operations is no longer packed into Advanced as Step 6.
+- Mask Operations opens as a standalone cleanup widget so Simple and Advanced can use the same mask-review tools.
+- Simple mode is designed around a short imaging workflow: choose image/task, add the prompt, then run preview.
+- Simple mode uses SAM3.0 for image tasks so Advanced SAM3.1 video-model choices do not break Simple image segmentation.
+- Device selection is explicit with `GPU` and `CPU`; automatic device mode is no longer exposed in the Simple workflow.
+- User-facing point-correction language now uses `Live Points` instead of `live refinement`.
+- The mode labels are short: `Simple` and `Advanced`.
+
+### Fixed
+
+- Fixed Simple mode runs so the SAM3 image model is prepared before preview inference.
+- Fixed Simple exemplar runs that could create prompt/result boxes without writing a mask until the model had been loaded manually in Advanced.
+- Kept Advanced model path, model type, and device controls from overriding Simple mode's SAM3.0 image-task path.
+- Kept Simple mode compact while allowing a wider, usable one-column layout.
+
 ## 3.3.0
 
 ### Fixed
@@ -103,12 +141,12 @@ Major update focused on SAM3.1 support, clearer model selection, live refinement
 - Remembered model type, model directory, and device selection through Qt settings.
 - Safer CUDA error reporting for unsupported GPU kernel architectures.
 
-### Live Refinement Improvements
+### Live Points Improvements
 
-- `Refinement (live point correction)` mode now arms live point refinement immediately after `Create Prompt Layer`.
+- `Live Points` mode now arms live point immediately after `Create Prompt Layer`.
 - The first point starts live refinement; the first run may take longer if the model is lazy-loaded.
-- `SAM3 preview labels` is pre-created for live refinement so napari does not switch users away from the points layer after the first result.
-- After each live refinement update, the active layer returns to `SAM3 points` in add mode.
+- `SAM3 preview labels` is pre-created for live point so napari does not switch users away from the points layer after the first result.
+- After each live point update, the active layer returns to `SAM3 points` in add mode.
 - `Next point mode` affects only future points.
 - `T` toggles next point mode only and does not rerun refinement.
 - `Shift+T` flips selected point polarity, or the latest point if none is selected, and reruns refinement.
@@ -145,7 +183,7 @@ Initial SAM3 Assistant plugin foundation.
   - 3D stack/video-like propagation
   - exemplar segmentation
   - text segmentation
-  - refinement with positive and negative prompts
+  - Live Points with positive and negative prompts
 - Prompt collection from napari Points, Shapes, Labels, and text input.
 - Box prompts from Shapes layers.
 - Labels-layer mask prompts.

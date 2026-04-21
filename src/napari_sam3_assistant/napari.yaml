@@ -1,6 +1,6 @@
 name: napari-sam3-assistant
 display_name: SAM3 Assistant
-description: A napari plugin for interactive Segment Anything Model 3 (SAM3) segmentation using text, points, boxes, exemplar prompts, point-based refinement, and 3D/video-like propagation
+description: A napari plugin for SAM3 image segmentation with Simple and Advanced workflows, text, points, boxes, exemplars, Live Points, and 3D/video-like propagation
 schema_version: 0.2.1
 
 visibility: public
@@ -12,7 +12,12 @@ contributions:
     - id: napari-sam3-assistant.make_widget
       title: SAM3 Assistant
       python_name: napari_sam3_assistant.widgets.main_widget:MainWidget
+    - id: napari-sam3-assistant.make_mask_operations_widget
+      title: SAM3 Mask Operations
+      python_name: napari_sam3_assistant.widgets.mask_operations_widget:MaskOperationsWidget
 
   widgets:
     - command: napari-sam3-assistant.make_widget
       display_name: SAM3 Assistant
+    - command: napari-sam3-assistant.make_mask_operations_widget
+      display_name: SAM3 Mask Operations

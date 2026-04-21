@@ -50,7 +50,7 @@ class RefinementTaskRunner:
         properties["polarity"] = np.asarray(values, dtype=object)
         layer.properties = properties
         layer.refresh_colors()
-        w._log(f"Flipped {len(indices)} point(s); rerunning refinement.")
+        w._log(f"Flipped {len(indices)} point(s); rerunning Live Points.")
         self.run_live_refinement_preview()
 
     def sync_live_refinement_layer(self) -> None:
@@ -75,5 +75,5 @@ class RefinementTaskRunner:
         w = self.widget
         if not self.live_refinement_enabled():
             return
-        w._set_live_refinement_status("Activity: live refinement running...")
+        w._set_live_refinement_status("Activity: Live Points running...")
         w.image_runner.run_current_task()

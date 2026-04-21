@@ -54,7 +54,7 @@ class ImageTaskRunner:
             w._log("Batch all image layers is for 2D image tasks. Use one stack for 3D/video propagation.")
             return
         if w._current_task() == Sam3Task.REFINE:
-            w._log("Batch mode is disabled for live refinement. Select one image for point refinement.")
+            w._log("Batch mode is disabled for Live Points. Select one image for point correction.")
             return
         if w._multi_text_prompts() and w._current_task() != Sam3Task.TEXT:
             w._log("Multi-text batch prompts require task 'Text segmentation'.")

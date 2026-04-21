@@ -24,9 +24,14 @@ class NumericTableWidgetItem(QTableWidgetItem):
 
 
 class ComponentTableWidget(QTableWidget):
-    def __init__(self, delete_callback: Callable[[], None] | None = None) -> None:
+    def __init__(
+        self,
+        delete_callback: Callable[[], None] | None = None,
+        locate_callback: Callable[[int], None] | None = None,
+    ) -> None:
         super().__init__(0, 6)
         self._delete_callback = delete_callback
+        self._locate_callback = locate_callback
         self.setObjectName("componentAnalysisTable")
         self.setHorizontalHeaderLabels(["Component ID", "Label", "Area", "Centroid Y", "Centroid X", "BBox"])
         self.setAlternatingRowColors(True)
@@ -38,6 +43,7 @@ class ComponentTableWidget(QTableWidget):
         self.setSortingEnabled(True)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._open_context_menu)
+        self.itemDoubleClicked.connect(self._locate_item)
 
     def set_records(self, records: list[ComponentRecord]) -> None:
         self.setSortingEnabled(False)
@@ -56,10 +62,16 @@ class ComponentTableWidget(QTableWidget):
     def selected_component_ids(self) -> list[int]:
         ids: list[int] = []
         for index in self.selectionModel().selectedRows():
-            item = self.item(index.row(), 0)
-            if item is not None:
-                ids.append(int(item.data(Qt.UserRole)))
+            component_id = self._component_id_for_row(index.row())
+            if component_id is not None:
+                ids.append(component_id)
         return ids
+
+    def _component_id_for_row(self, row: int) -> int | None:
+        item = self.item(row, 0)
+        if item is None:
+            return None
+        return int(item.data(Qt.UserRole))
 
     def _set_numeric_item(self, row: int, column: int, value: int) -> None:
         item = NumericTableWidgetItem(str(value))
@@ -78,3 +90,10 @@ class ComponentTableWidget(QTableWidget):
         action = menu.addAction("Delete Selected Components")
         if menu.exec_(self.viewport().mapToGlobal(position)) == action:
             self._delete_callback()
+
+    def _locate_item(self, item: QTableWidgetItem) -> None:
+        if self._locate_callback is None:
+            return
+        component_id = self._component_id_for_row(item.row())
+        if component_id is not None:
+            self._locate_callback(component_id)
