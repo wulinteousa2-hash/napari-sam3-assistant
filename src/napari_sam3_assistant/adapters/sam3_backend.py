@@ -361,6 +361,14 @@ class Sam3Adapter:
             else:
                 cache.setdefault(frame_index, {})
 
+    def has_video_session(self, session: Sam3Session | None) -> bool:
+        if session is None or not session.session_id:
+            return False
+        sessions = getattr(self.video_predictor, "_all_inference_states", None)
+        if not isinstance(sessions, dict):
+            return True
+        return session.session_id in sessions
+
     def propagate_video(
         self,
         bundle: PromptBundle,

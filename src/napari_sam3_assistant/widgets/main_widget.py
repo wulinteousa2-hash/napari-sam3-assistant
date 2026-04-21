@@ -906,6 +906,7 @@ class MainWidget(QWidget):
         self.prompt_state_service.clear()
         self.text_prompt_edit.clear()
         self.multi_text_prompt_edit.clear()
+        self._reset_video_session()
         self._log("Prompt state cleared.")
 
     def _refresh_layers(self, silent: bool = False) -> None:
@@ -1301,14 +1302,21 @@ class MainWidget(QWidget):
             self._log("No active SAM3 video session. Run a 3D/video task first.")
             return
         try:
-            bundle = self._collect_bundle()
-        except Exception as exc:
-            self._log(f"Cannot collect prompts: {exc}")
-            return
-        try:
             adapter = self._ensure_adapter()
         except Exception as exc:
             self._log(f"Cannot propagate session: {exc}")
+            return
+        if not adapter.has_video_session(self.video_session):
+            self._reset_video_session()
+            self._log(
+                "The previous SAM3 video session is no longer active. "
+                "Run a new 3D/video preview before propagating again."
+            )
+            return
+        try:
+            bundle = self._collect_bundle()
+        except Exception as exc:
+            self._log(f"Cannot collect prompts: {exc}")
             return
         session = self.video_session
         direction = self.propagation_direction_combo.currentText()
@@ -1396,6 +1404,11 @@ class MainWidget(QWidget):
     def _set_video_session(self, session: Sam3Session) -> None:
         self.video_session = session
         self._log(f"Video session ready: {session.session_id}")
+
+    def _reset_video_session(self) -> None:
+        self.video_session = None
+        if self.adapter is not None:
+            self.adapter.video_session = None
 
     def _on_image_initialized(self, message: str) -> None:
         self._log(message)
@@ -1936,10 +1949,19 @@ class MainWidget(QWidget):
                 pass
             self._worker = None
             self._set_running(False)
+            if self._current_task() == Sam3Task.SEGMENT_3D:
+                self._reset_video_session()
+                self._log("Cancelled 3D/video task; run preview again to start a new SAM3 session.")
 
     def _on_worker_error(self, error: Any) -> None:
         self._worker_failed = True
         self._log(f"SAM3 task failed: {error}")
+        if self._is_missing_video_session_error(error):
+            self._reset_video_session()
+            self._log(
+                "The SAM3 video session expired or was cancelled. "
+                "Run a new 3D/video preview before propagating again."
+            )
         if _is_cuda_kernel_image_error(error):
             self._log(
                 "CUDA kernel compatibility failure detected. The selected GPU is visible, "
@@ -1949,6 +1971,10 @@ class MainWidget(QWidget):
             )
         if self._current_task() == Sam3Task.REFINE and self.prompt_tool_combo.currentData() == PROMPT_POINTS:
             self._set_live_refinement_status("Activity: failed")
+
+    def _is_missing_video_session_error(self, error: Any) -> bool:
+        text = str(error)
+        return "Cannot find session" in text and "might have expired" in text
 
     def _on_worker_finished(self) -> None:
         self._worker = None

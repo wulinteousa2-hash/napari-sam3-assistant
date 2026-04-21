@@ -12,6 +12,7 @@ All notable changes to `napari-sam3-assistant` are documented here.
 
 - Fixed 3D/video point prompting for SAM3 video predictors by sending normalized point coordinates and an object id with point prompts.
 - Fixed initial 3D/video point propagation crashes caused by missing SAM3 tracker frame-cache entries before propagation.
+- Fixed stale SAM3 video-session handling after cancelling or clearing prompt state so users can start a new 3D/video run without restarting napari.
 - Added clear validation for unsupported 3D/video labels-mask prompts, mixed point plus text/box prompt requests, SAM3.0 multi-box video prompts, and point requests above 16 points.
 
 ## 3.1.0

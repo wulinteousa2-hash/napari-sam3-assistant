@@ -405,3 +405,19 @@ def test_sam31_video_box_prompt_allows_multiple_boxes():
         (0.1, 0.1, 0.1, 0.2),
         (0.3, 0.5, 0.1, 0.2),
     ]
+
+
+def test_has_video_session_checks_backend_session_registry():
+    class Predictor:
+        _all_inference_states = {"active-session": {"state": {}}}
+
+    selection = infer_image_selection("stack", (3, 10, 20))
+    adapter = Sam3Adapter()
+    adapter.video_predictor = Predictor()
+
+    assert adapter.has_video_session(
+        Sam3Session(task=Sam3Task.SEGMENT_3D, image=selection, session_id="active-session")
+    )
+    assert not adapter.has_video_session(
+        Sam3Session(task=Sam3Task.SEGMENT_3D, image=selection, session_id="expired-session")
+    )

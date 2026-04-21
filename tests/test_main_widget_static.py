@@ -62,6 +62,8 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     assert "Apply mode to selected points" in source
     assert "Add the first point to start live refinement; first run may load the model." in source
     assert "T = next point mode only. Shift+T = flip selected/latest point and rerun." in source
+    assert "Run a new 3D/video preview before propagating again." in source
+    assert "Cancelled 3D/video task; run preview again to start a new SAM3 session." in source
 
 
 def test_widget_does_not_expose_dummy_mask_debug_action():
