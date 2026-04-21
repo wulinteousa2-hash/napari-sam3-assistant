@@ -330,6 +330,14 @@ class Sam3Adapter:
             self._ensure_video_prompt_frame_cache(session.session_id, frame_index)
 
         if bundle.boxes:
+            if not (bundle.text and bundle.text.text):
+                return self._add_video_box_tracker_prompts(
+                    bundle,
+                    session,
+                    frame_index=frame_index,
+                    mapper=mapper,
+                    image_hw=(height, width),
+                )
             request["bounding_boxes"] = [
                 mapper.box_to_normalized_xywh(box, (height, width))
                 for box in bundle.boxes
@@ -341,6 +349,53 @@ class Sam3Adapter:
         with self._inference_context():
             response = self.video_predictor.handle_request(request)
         return self._result_from_video_output(bundle, response, session.session_id)
+
+    def _add_video_box_tracker_prompts(
+        self,
+        bundle: PromptBundle,
+        session: Sam3Session,
+        *,
+        frame_index: int,
+        mapper: CoordinateMapper,
+        image_hw: tuple[int, int],
+    ) -> Sam3Result:
+        for box in bundle.boxes:
+            if box.polarity != PromptPolarity.POSITIVE:
+                raise RuntimeError(
+                    "SAM3 3D/video box propagation supports positive tracking boxes. "
+                    "Use point prompts for negative corrections after starting the object."
+                )
+
+        object_ids = [
+            box.object_id if box.object_id is not None else index
+            for index, box in enumerate(bundle.boxes, start=1)
+        ]
+        if len(object_ids) != len(set(object_ids)):
+            raise RuntimeError("SAM3 video box prompts must use unique object ids.")
+
+        result: Sam3Result | None = None
+        for object_id, box in zip(object_ids, bundle.boxes, strict=False):
+            x0, y0, x1, y1 = mapper.box_to_xyxy(box)
+            request = {
+                "type": "add_prompt",
+                "session_id": session.session_id,
+                "frame_index": frame_index,
+                "obj_id": object_id,
+                "points": [
+                    mapper.point_to_normalized_xy(y0, x0, image_hw),
+                    mapper.point_to_normalized_xy(y1, x1, image_hw),
+                ],
+                "point_labels": [2, 3],
+            }
+            self._ensure_video_prompt_frame_cache(session.session_id or "", frame_index)
+            with self._inference_context():
+                response = self.video_predictor.handle_request(request)
+            result = self._result_from_video_output(bundle, response, session.session_id or "")
+
+        if result is None:
+            raise RuntimeError("No SAM3 video box prompts were provided.")
+        result.metadata["prompt_mode"] = "tracker_box"
+        return result
 
     def _ensure_video_prompt_frame_cache(self, session_id: str, frame_index: int) -> None:
         sessions = getattr(self.video_predictor, "_all_inference_states", None)

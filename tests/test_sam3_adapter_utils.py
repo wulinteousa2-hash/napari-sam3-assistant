@@ -376,15 +376,24 @@ def test_sam30_video_box_prompt_rejects_multiple_initial_boxes():
         raise AssertionError("Expected multiple SAM3.0 video boxes to fail clearly")
 
 
-def test_sam31_video_box_prompt_allows_multiple_boxes():
+def test_sam31_video_box_prompt_uses_tracker_box_points():
     requests = []
 
     class Predictor:
+        _all_inference_states = {
+            "session-1": {
+                "state": {
+                    "num_frames": 3,
+                    "cached_frame_outputs": {},
+                },
+            },
+        }
+
         def handle_request(self, request):
             requests.append(request)
-            return {"frame_index": 0, "outputs": {}}
+            return {"frame_index": request["frame_index"], "outputs": {}}
 
-    selection = infer_image_selection("stack", (3, 10, 20))
+    selection = infer_image_selection("stack", (3, 10, 20), dims_current_step=(1, 0, 0))
     session = Sam3Session(task=Sam3Task.SEGMENT_3D, image=selection, session_id="session-1")
     adapter = Sam3Adapter(
         Sam3AdapterConfig(checkpoint_path=Path("/models/sam3.1_multiplex.pt"))
@@ -401,10 +410,74 @@ def test_sam31_video_box_prompt_allows_multiple_boxes():
 
     adapter.add_video_prompt(bundle, session)
 
-    assert requests[0]["bounding_boxes"] == [
-        (0.1, 0.1, 0.1, 0.2),
-        (0.3, 0.5, 0.1, 0.2),
+    assert adapter.video_predictor._all_inference_states["session-1"]["state"][
+        "cached_frame_outputs"
+    ] == {0: {}, 1: {}, 2: {}}
+    assert requests == [
+        {
+            "type": "add_prompt",
+            "session_id": "session-1",
+            "frame_index": 1,
+            "obj_id": 1,
+            "points": [(0.1, 0.1), (0.2, 0.3)],
+            "point_labels": [2, 3],
+        },
+        {
+            "type": "add_prompt",
+            "session_id": "session-1",
+            "frame_index": 1,
+            "obj_id": 2,
+            "points": [(0.3, 0.5), (0.4, 0.7)],
+            "point_labels": [2, 3],
+        },
     ]
+
+
+def test_sam31_video_text_box_prompt_keeps_semantic_box_request():
+    requests = []
+
+    class Predictor:
+        def handle_request(self, request):
+            requests.append(request)
+            return {"frame_index": 0, "outputs": {}}
+
+    selection = infer_image_selection("stack", (3, 10, 20))
+    session = Sam3Session(task=Sam3Task.SEGMENT_3D, image=selection, session_id="session-1")
+    adapter = Sam3Adapter(
+        Sam3AdapterConfig(checkpoint_path=Path("/models/sam3.1_multiplex.pt"))
+    )
+    adapter.video_predictor = Predictor()
+    bundle = PromptBundle(
+        task=Sam3Task.SEGMENT_3D,
+        image=selection,
+        text=TextPrompt("cell"),
+        boxes=[BoxPrompt(y0=1, x0=2, y1=3, x1=4)],
+    )
+
+    adapter.add_video_prompt(bundle, session)
+
+    assert requests[0]["text"] == "cell"
+    assert requests[0]["bounding_boxes"] == [(0.1, 0.1, 0.1, 0.2)]
+    assert requests[0]["bounding_box_labels"] == [1]
+
+
+def test_video_box_prompt_rejects_negative_tracker_box():
+    selection = infer_image_selection("stack", (3, 10, 20))
+    session = Sam3Session(task=Sam3Task.SEGMENT_3D, image=selection, session_id="session-1")
+    adapter = Sam3Adapter()
+    adapter.video_predictor = object()
+    bundle = PromptBundle(
+        task=Sam3Task.SEGMENT_3D,
+        image=selection,
+        boxes=[BoxPrompt(y0=1, x0=2, y1=3, x1=4, polarity=PromptPolarity.NEGATIVE)],
+    )
+
+    try:
+        adapter.add_video_prompt(bundle, session)
+    except RuntimeError as error:
+        assert "positive tracking boxes" in str(error)
+    else:
+        raise AssertionError("Expected negative video box prompt to fail clearly")
 
 
 def test_has_video_session_checks_backend_session_registry():
