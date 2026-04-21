@@ -7,6 +7,7 @@ All notable changes to `napari-sam3-assistant` are documented here.
 ### Changed
 
 - Clarified 3D/video task guidance and documented prompt-count limits for box, point, and labels-mask prompts.
+- Made the primary run button task-aware: `Run Preview` changes to `Start 3D Propagation` in 3D/video mode, and existing-session propagation is disabled until a valid session exists.
 
 ### Fixed
 

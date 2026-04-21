@@ -769,10 +769,15 @@ class MainWidget(QWidget):
         row = QHBoxLayout()
         self.run_btn = QPushButton("Run Preview")
         self.run_btn.setObjectName("runButton")
+        self.run_btn.setToolTip("Run the selected SAM3 task and write preview layers.")
         self.run_btn.clicked.connect(self._run_current_task)
 
-        self.propagate_btn = QPushButton("Propagate Stack/Video")
+        self.propagate_btn = QPushButton("Propagate Existing Session")
         self.propagate_btn.setObjectName("runButton")
+        self.propagate_btn.setToolTip(
+            "Reuse the current SAM3 video session without adding a new prompt. "
+            "Use after a successful 3D propagation run."
+        )
         self.propagate_btn.clicked.connect(self._propagate_existing_session)
 
         cancel_btn = QPushButton("Cancel")
@@ -932,9 +937,8 @@ class MainWidget(QWidget):
 
     def _on_task_changed(self) -> None:
         task = self._current_task()
-        is_video = task == Sam3Task.SEGMENT_3D
         self._sync_task_setup_visibility()
-        self.propagate_btn.setEnabled(is_video and self._worker is None)
+        self._sync_run_controls()
         if task == Sam3Task.TEXT:
             self.prompt_tool_combo.setCurrentIndex(self.prompt_tool_combo.findData(PROMPT_TEXT))
         elif task == Sam3Task.EXEMPLAR:
@@ -965,6 +969,26 @@ class MainWidget(QWidget):
             and self._propagation_direction_row_label is not None
         ):
             self._propagation_direction_row_label.setVisible(is_video)
+
+    def _sync_run_controls(self) -> None:
+        if not hasattr(self, "run_btn") or not hasattr(self, "propagate_btn"):
+            return
+        is_video = self._current_task() == Sam3Task.SEGMENT_3D
+        has_session = self.video_session is not None
+        running = self._worker is not None
+        if is_video:
+            self.run_btn.setText("Start 3D Propagation")
+            self.run_btn.setToolTip(
+                "Start a new SAM3 video session from the current frame prompt and "
+                "propagate through the stack."
+            )
+            self.propagate_btn.setVisible(True)
+            self.propagate_btn.setEnabled(not running and has_session)
+        else:
+            self.run_btn.setText("Run Preview")
+            self.run_btn.setToolTip("Run the selected SAM3 task and write preview layers.")
+            self.propagate_btn.setVisible(False)
+            self.propagate_btn.setEnabled(False)
 
 
     def _sync_model_type_controls(self) -> None:
@@ -1403,12 +1427,14 @@ class MainWidget(QWidget):
 
     def _set_video_session(self, session: Sam3Session) -> None:
         self.video_session = session
+        self._sync_run_controls()
         self._log(f"Video session ready: {session.session_id}")
 
     def _reset_video_session(self) -> None:
         self.video_session = None
         if self.adapter is not None:
             self.adapter.video_session = None
+        self._sync_run_controls()
 
     def _on_image_initialized(self, message: str) -> None:
         self._log(message)
@@ -1993,7 +2019,7 @@ class MainWidget(QWidget):
 
     def _set_running(self, running: bool) -> None:
         self.run_btn.setEnabled(not running)
-        self.propagate_btn.setEnabled(not running and self._current_task() == Sam3Task.SEGMENT_3D)
+        self._sync_run_controls()
         self.setCursor(Qt.BusyCursor if running else Qt.ArrowCursor)
 
     def _set_activity_running_message(self) -> None:

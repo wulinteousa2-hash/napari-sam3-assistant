@@ -413,7 +413,9 @@ Workflow:
    - `both`
    - `forward`
    - `backward`
-6. Click `Run Preview` or `Propagate Stack/Video`.
+6. Click `Start 3D Propagation`.
+
+In `3D/video propagation` mode, the primary run button changes from `Run Preview` to `Start 3D Propagation`. This starts a new SAM3 video session, adds the current frame prompt, and propagates through the stack. `Propagate Existing Session` is an advanced action that reuses the current SAM3 video session without adding a new prompt; it is enabled only after a successful 3D propagation run.
 
 3D/video prompt limits:
 

@@ -57,6 +57,10 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     assert "Saved {saved} batch label layer(s)." in source
     assert "Create Prompt Layer" in source
     assert "Clear Preview" in source
+    assert "Start 3D Propagation" in source
+    assert "Propagate Existing Session" in source
+    assert "Start a new SAM3 video session from the current frame prompt" in source
+    assert "Reuse the current SAM3 video session without adding a new prompt" in source
     assert "Save Result as Labels" not in source
     assert "Save Accepted Object" not in source
     assert "Apply mode to selected points" in source
