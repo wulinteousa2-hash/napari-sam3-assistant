@@ -62,73 +62,127 @@ Use a **new Conda environment with Python 3.12** and install napari, SAM3, and `
 
 ### Windows
 
+1. Download and install **Miniforge**:  
+   https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Windows-x86_64.exe
 
-```powershell
-# 1) install Miniforge first from:
-# https://conda-forge.org/download/
+2. After Miniforge is installed, open either:
+   - **Miniforge Prompt**
+   - **PowerShell**
 
-# 2) open Miniforge Prompt or PowerShell after Miniforge is installed
-
-
+3. Create and activate the environment
+```Bash
 conda create -n napari-sam3 python=3.12 -y
 conda activate napari-sam3
-
+```
+4. Install base Python tools and napari
+```Bash
 python -m pip install --upgrade pip wheel
 python -m pip install "setuptools<82"
 python -m pip install "napari[all]"
+```
+5. Install PyTorch
 
-# choose one:
-# CPU
+### Choose one:
+
+### CPU
+```Bash
 python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-
-# GPU
+```
+### GPU
+```Bash
 python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 ```
+6. Install SAM3
 
-### Install SAM3 (Windows)
-```
+Choose one:
+
+Option A. Install from a local clone
+```Bash
 git clone https://github.com/facebookresearch/sam3.git
 cd sam3
 python -m pip install --no-cache-dir -e .
-
-
-python -m pip install einops triton-windows pycocotools
-
 ```
-
-## Linux ARM64 (AArch64)
-
+Option B. Install directly from GitHub
 ```Bash
-# 1) install Miniforge first from:
-# https://conda-forge.org/download/
+python -m pip install --no-cache-dir git+https://github.com/facebookresearch/sam3
+```
+7. Install extra dependencies
+```Bash
+python -m pip install einops triton-windows pycocotools
+```
+8. Install napari-sam3-assistant
+```Bash
+python -m pip install napari-sam3-assistant
+```
+If you are installing from a local repository checkout instead:
+```Bash
+python -m pip install -e .
+```
+9. Launch napari
+napari
 
+### Linux ARM64 (AArch64)
+1. Download Miniforge
+https://conda-forge.org/download/
+
+Install Miniforge first.
+```Bash
+chmod +x Miniforge3-Linux-aarch64.sh
+./Miniforge3-Linux-aarch64.sh -b -p "$HOME/miniforge3"
+source "$HOME/miniforge3/bin/activate"
+```
+2. Create and activate the environment
+```Bash
 conda create -n napari-sam3 python=3.12 -y
 conda activate napari-sam3
-
+```
+3. Install base Python tools and napari
+```Bash
 python -m pip install --upgrade pip wheel
 python -m pip install "setuptools<82" "numpy>=1.26,<2"
-pip install "napari[bermuda, pyqt6, optional-numba, optional-base]"
-
-# choose one:
-# CPU
-
-python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-
-# GPU
-
-python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
-
-
+python -m pip install "napari[bermuda, pyqt6, optional-numba, optional-base]"
 ```
-### Install SAM3 (Linux ARM64)
 
-```bash
+4. Install PyTorch
+
+Choose one:
+
+### CPU
+```Bash
+python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+```
+### GPU
+```Bash
+python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+```
+5. Install SAM3
+```Bash
 git clone https://github.com/facebookresearch/sam3.git
 cd sam3
 python -m pip install --no-cache-dir -e .
-
+```
+6. Install napari-sam3-assistant
+```Bash
+python -m pip install napari-sam3-assistant
+```
+If you are installing from a local repository checkout instead:
+```Bash
+python -m pip install -e .
+```
+7. Launch napari
+```Bash
+napari
 ```
 
+Verify the installation
+
+Inside the activated environment, confirm that SAM3 imports correctly:
+
+python -c "import sam3; print('sam3 import OK')"
+
+You can also verify napari:
+
+python -c "import napari; print(napari.__version__)"
 
 
 ## Download SAM 3 model files
