@@ -177,13 +177,13 @@ napari
 Verify the installation
 
 Inside the activated environment, confirm that SAM3 imports correctly:
-
+```Bash
 python -c "import sam3; print('sam3 import OK')"
-
+```
 You can also verify napari:
-
+```Bash
 python -c "import napari; print(napari.__version__)"
-
+```
 
 ## Download SAM 3 model files
 
