@@ -7,7 +7,7 @@ name = "napari-sam3-assistant"
 version = "4.0.0"
 description = "A napari plugin for Segment Anything Model 3 (SAM3) image segmentation with Simple and Advanced workflows, text, points, boxes, exemplars, large-image ROI inference, mask operations, and 3D/video-like propagation"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
   { name = "Wulin Teo" }
@@ -24,7 +24,7 @@ classifiers = [
   "Intended Audience :: Science/Research",
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.11",
   "Topic :: Scientific/Engineering :: Image Processing",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]

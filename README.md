@@ -41,7 +41,7 @@ Release notes and bug-fix history are maintained in [CHANGELOG.md](CHANGELOG.md)
 
 ## Requirements
 
-- Python `>=3.12`
+- Python `>=3.11`
 - napari `>=0.5`
 - SAM 3 Python package importable as `sam3`
 - PyTorch and torchvision installed for your platform
@@ -58,7 +58,7 @@ If CUDA is not available or not compatible, select **CPU** in the widget.
 
 If you installed the standalone napari desktop app from the website, Plugin Manager may not work for this plugin because that app uses a different Python environment.
 
-Use a **new Conda environment with Python 3.12** and install napari, SAM3, and `napari-sam3-assistant` there.
+Use a **new Conda environment with Python 3.11** and install napari, SAM3, and `napari-sam3-assistant` there.
 
 ### Windows
 
@@ -69,9 +69,13 @@ Use a **new Conda environment with Python 3.12** and install napari, SAM3, and `
    - **Miniforge Prompt**
    - **PowerShell**
 
+<<<<<<< HEAD
 3. Create and activate the environment
 ```Bash
 conda create -n napari-sam3 python=3.12 -y
+=======
+conda create -n napari-sam3 python=3.11 -y
+>>>>>>> 79954b2 (Lower minimum Python requirement to 3.11; thanks Peter Sobolewski for catching this)
 conda activate napari-sam3
 ```
 4. Install base Python tools and napari
@@ -97,7 +101,34 @@ python -m pip install torch torchvision torchaudio --index-url https://download.
 Choose one:
 
 Option A. Install from a local clone
+
 ```Bash
+=======
+# 1) install Miniforge first from:
+# https://conda-forge.org/download/
+
+conda create -n napari-sam3 python=3.11 -y
+conda activate napari-sam3
+
+python -m pip install --upgrade pip wheel
+python -m pip install "setuptools<82" "numpy>=1.26,<2"
+pip install "napari[bermuda, pyqt6, optional-numba, optional-base]"
+```
+
+# choose one:
+# CPU
+
+python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# GPU
+
+python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+
+
+```
+### Install SAM3 (Linux ARM64)
+
+```bash
 git clone https://github.com/facebookresearch/sam3.git
 cd sam3
 python -m pip install --no-cache-dir -e .
@@ -653,7 +684,7 @@ Overlap inspection:
 
 For ARM64 systems such as NVIDIA DGX Spark / GB10:
 
-- Use Python 3.12 or newer.
+- Use Python 3.11 or newer.
 - Keep the NVIDIA driver and CUDA stack current.
 - Install a PyTorch/torchvision build that supports your GPU architecture.
 - Use `CPU` mode for reliable 2D execution if CUDA kernels are unavailable.
