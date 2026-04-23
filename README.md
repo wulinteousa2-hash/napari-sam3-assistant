@@ -54,12 +54,6 @@ If CUDA is not available or not compatible, select **CPU** in the widget.
 
 ## Setup
 
-
-
-If you installed the standalone napari desktop app from the website, Plugin Manager may not work for this plugin because that app uses a different Python environment.
-
-Use a **new Conda environment with Python 3.11** and install napari, SAM3, and `napari-sam3-assistant` there.
-
 ### Windows
 
 1. Download and install **Miniforge**:  
@@ -98,36 +92,6 @@ python -m pip install torch torchvision torchaudio --index-url https://download.
 ```
 6. Install SAM3
 
-Choose one:
-
-Option A. Install from a local clone
-
-```Bash
-=======
-# 1) install Miniforge first from:
-# https://conda-forge.org/download/
-
-conda create -n napari-sam3 python=3.11 -y
-conda activate napari-sam3
-
-python -m pip install --upgrade pip wheel
-python -m pip install "setuptools<82" "numpy>=1.26,<2"
-pip install "napari[bermuda, pyqt6, optional-numba, optional-base]"
-```
-
-# choose one:
-# CPU
-
-python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-
-# GPU
-
-python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
-
-
-```
-### Install SAM3 (Linux ARM64)
-
 ```bash
 git clone https://github.com/facebookresearch/sam3.git
 cd sam3
@@ -150,7 +114,9 @@ If you are installing from a local repository checkout instead:
 python -m pip install -e .
 ```
 9. Launch napari
+```
 napari
+```
 
 ### Linux ARM64 (AArch64)
 1. Download Miniforge
@@ -164,7 +130,7 @@ source "$HOME/miniforge3/bin/activate"
 ```
 2. Create and activate the environment
 ```Bash
-conda create -n napari-sam3 python=3.12 -y
+conda create -n napari-sam3 python=3.11 -y
 conda activate napari-sam3
 ```
 3. Install base Python tools and napari
@@ -191,8 +157,13 @@ python -m pip install torch torchvision torchaudio --index-url https://download.
 git clone https://github.com/facebookresearch/sam3.git
 cd sam3
 python -m pip install --no-cache-dir -e .
+
+6. Install extra dependencies
+```Bash
+python -m pip install einops triton pycocotools
 ```
-6. Install napari-sam3-assistant
+
+7. Install napari-sam3-assistant
 ```Bash
 python -m pip install napari-sam3-assistant
 ```
@@ -200,7 +171,7 @@ If you are installing from a local repository checkout instead:
 ```Bash
 python -m pip install -e .
 ```
-7. Launch napari
+8. Launch napari
 ```Bash
 napari
 ```
