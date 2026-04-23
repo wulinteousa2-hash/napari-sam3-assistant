@@ -69,13 +69,13 @@ Use a **new Conda environment with Python 3.11** and install napari, SAM3, and `
    - **Miniforge Prompt**
    - **PowerShell**
 
-<<<<<<< HEAD
+
 3. Create and activate the environment
 ```Bash
-conda create -n napari-sam3 python=3.12 -y
+
 =======
 conda create -n napari-sam3 python=3.11 -y
->>>>>>> 79954b2 (Lower minimum Python requirement to 3.11; thanks Peter Sobolewski for catching this)
+
 conda activate napari-sam3
 ```
 4. Install base Python tools and napari
