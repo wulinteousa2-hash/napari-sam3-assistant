@@ -1,4 +1,5 @@
 from pathlib import Path
+import logging
 import sys
 import types
 
@@ -181,6 +182,85 @@ def test_sam31_checkpoint_routes_to_multiplex_video_predictor(monkeypatch):
     assert calls["use_rope_real"] is True
     assert "gpus_to_use" not in calls
     assert "device" not in calls
+
+
+def test_start_video_session_drops_unsupported_offload_state_kwarg(caplog):
+    class LegacyModel:
+        def __init__(self):
+            self.calls = []
+
+        def init_state(self, resource_path):
+            self.calls.append({"resource_path": resource_path})
+            return {"resource_path": resource_path}
+
+    class Predictor:
+        def __init__(self):
+            self.model = LegacyModel()
+
+        def handle_request(self, request):
+            self.model.init_state(
+                resource_path=request["resource_path"],
+                offload_state_to_cpu=False,
+            )
+            return {"session_id": "session-1"}
+
+    selection = infer_image_selection("stack", (3, 4, 5))
+    bundle = PromptBundle(task=Sam3Task.SEGMENT_3D, image=selection)
+    adapter = Sam3Adapter()
+    adapter.video_predictor = Predictor()
+
+    caplog.set_level(logging.WARNING, logger=backend.__name__)
+    session = adapter.start_video_session(np.zeros((3, 4, 5), dtype=np.uint8), bundle)
+
+    assert session.session_id == "session-1"
+    assert len(adapter.video_predictor.model.calls) == 1
+    assert "resource_path" in adapter.video_predictor.model.calls[0]
+    assert any(
+        "does not support offload_state_to_cpu" in record.message for record in caplog.records
+    )
+
+
+def test_start_video_session_preserves_supported_offload_state_kwarg(caplog):
+    class ModernModel:
+        def __init__(self):
+            self.calls = []
+
+        def init_state(self, resource_path, offload_state_to_cpu=False):
+            self.calls.append(
+                {
+                    "resource_path": resource_path,
+                    "offload_state_to_cpu": offload_state_to_cpu,
+                }
+            )
+            return {"resource_path": resource_path}
+
+    class Predictor:
+        def __init__(self):
+            self.model = ModernModel()
+
+        def handle_request(self, request):
+            self.model.init_state(
+                resource_path=request["resource_path"],
+                offload_state_to_cpu=False,
+            )
+            return {"session_id": "session-1"}
+
+    selection = infer_image_selection("stack", (3, 4, 5))
+    bundle = PromptBundle(task=Sam3Task.SEGMENT_3D, image=selection)
+    adapter = Sam3Adapter()
+    adapter.video_predictor = Predictor()
+
+    caplog.set_level(logging.WARNING, logger=backend.__name__)
+    session = adapter.start_video_session(np.zeros((3, 4, 5), dtype=np.uint8), bundle)
+
+    assert session.session_id == "session-1"
+    assert adapter.video_predictor.model.calls == [
+        {
+            "resource_path": str(session.resource_path),
+            "offload_state_to_cpu": False,
+        }
+    ]
+    assert not caplog.records
 
 
 def test_sam31_checkpoint_rejects_current_2d_image_loader():

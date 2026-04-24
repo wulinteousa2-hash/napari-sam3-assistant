@@ -4,6 +4,8 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 import copy
 import hashlib
+import inspect
+import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Iterator
@@ -18,6 +20,7 @@ from ..core.models import PromptBundle, PromptPolarity, Sam3Result, Sam3Session,
 
 
 MAX_VIDEO_POINT_PROMPTS = 16
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -110,6 +113,7 @@ class Sam3Adapter:
                 **kwargs,
                 gpus_to_use=[gpu_id],
             )
+        self._install_video_backend_compatibility()
 
     def unload(self) -> None:
         self._remove_dtype_hooks()
@@ -241,6 +245,7 @@ class Sam3Adapter:
     def start_video_session(self, stack_data: np.ndarray, bundle: PromptBundle) -> Sam3Session:
         if self.video_predictor is None:
             self.load_video()
+        self._install_video_backend_compatibility()
 
         self._temp_video_dir = TemporaryDirectory(prefix="napari-sam3-video-")
         video_dir = Path(self._temp_video_dir.name)
@@ -261,6 +266,61 @@ class Sam3Adapter:
         )
         self.video_session = session
         return session
+
+    def _install_video_backend_compatibility(self) -> None:
+        predictor = self.video_predictor
+        if predictor is None:
+            return
+        model = getattr(predictor, "model", None)
+        if model is None:
+            return
+        self._wrap_unsupported_kwargs(
+            model,
+            "init_state",
+            ignored_kwargs=("offload_state_to_cpu",),
+            log_context="SAM3 video init_state()",
+        )
+
+    def _wrap_unsupported_kwargs(
+        self,
+        target: Any,
+        method_name: str,
+        *,
+        ignored_kwargs: tuple[str, ...],
+        log_context: str,
+    ) -> None:
+        wrapped = getattr(target, method_name, None)
+        if wrapped is None or getattr(wrapped, "_napari_sam3_compat_wrapper", False):
+            return
+        try:
+            signature = inspect.signature(wrapped)
+        except (TypeError, ValueError):
+            return
+        if any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        ):
+            return
+        unsupported = tuple(name for name in ignored_kwargs if name not in signature.parameters)
+        if not unsupported:
+            return
+
+        def compat_wrapper(*args: Any, **kwargs: Any) -> Any:
+            removed = [name for name in unsupported if name in kwargs]
+            if removed:
+                kwargs = dict(kwargs)
+                for name in removed:
+                    kwargs.pop(name, None)
+                LOGGER.warning(
+                    "%s does not support %s; retrying without %s for compatibility.",
+                    log_context,
+                    ", ".join(removed),
+                    ", ".join(removed),
+                )
+            return wrapped(*args, **kwargs)
+
+        setattr(compat_wrapper, "_napari_sam3_compat_wrapper", True)
+        setattr(target, method_name, compat_wrapper)
 
     def add_video_prompt(self, bundle: PromptBundle, session: Sam3Session) -> Sam3Result:
         if self.video_predictor is None:
