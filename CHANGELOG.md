@@ -2,6 +2,26 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.0.1
+
+Small compatibility release focused on SAM3.1 3D/video troubleshooting.
+
+### Added
+
+- Added a documented Windows `SAM3.1` workaround folder with replacement upstream `sam3` files for multiplex propagation failures caused by missing Windows kernel paths.
+- Added Windows README guidance that points affected users to `windows_sam31_workaround/README.md` when `SAM3.1` multiplex propagation fails with `No available kernel. Aborting execution!`.
+
+### Fixed
+
+- Fixed the earlier `SAM3.1` 3D/video session-start crash caused by passing `offload_state_to_cpu` into installed `sam3` backends whose `init_state()` does not accept that keyword.
+- Kept the plugin-side compatibility handling for that `start_session` / `init_state` API mismatch so propagation can begin on backends that otherwise support `SAM3.1` multiplex.
+
+### Notes
+
+- There are two distinct `SAM3.1` issues to separate when debugging:
+  - `start_session` failure with `unexpected keyword argument 'offload_state_to_cpu'`: plugin/backend API mismatch, fixed in the plugin.
+  - later `propagate_in_video` failure with `No available kernel. Aborting execution!`: runtime/kernel issue seen on some Windows systems, documented as an upstream `sam3` workaround rather than a plugin runtime change.
+
 ## 4.0.0
 
 Major UI update for image-segmentation workflows.

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "napari-sam3-assistant"
-version = "4.0.0"
+version = "4.0.1"
 description = "A napari plugin for Segment Anything Model 3 (SAM3) image segmentation with Simple and Advanced workflows, text, points, boxes, exemplars, large-image ROI inference, mask operations, and 3D/video-like propagation"
 readme = "README.md"
 requires-python = ">=3.11"

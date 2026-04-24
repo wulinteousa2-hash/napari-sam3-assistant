@@ -15,9 +15,14 @@ The plugin focuses on task-based segmentation workflows:
 - Live Points with positive and negative prompts
 - downstream mask cleanup, merge, and export operations
 
-## What's New in 4.0.0
+## What's New in 4.0.1
 
-Version 4.0.0 is a workflow release focused on the new Simple mode and a cleaner Advanced mode.
+Version 4.0.1 keeps the 4.0 workflow update and adds a small SAM3.1 compatibility follow-up:
+
+- Keeps the plugin-side fix for the earlier `SAM3.1` `start_session` crash where some installed `sam3` backends rejected `offload_state_to_cpu` during `init_state()`.
+- Documents the separate Windows-only `SAM3.1` multiplex runtime workaround for later `No available kernel. Aborting execution!` propagation failures.
+
+Version 4.0.0 was a workflow release focused on the new Simple mode and a cleaner Advanced mode.
 
 - New `Simple` mode for common imaging tasks with a compact one-column layout.
 - `Advanced` mode keeps the full manual UI for model setup, batch work, large-image ROI settings, result tables, mask operations, and detailed logs.
@@ -105,6 +110,9 @@ python -m pip install --no-cache-dir git+https://github.com/facebookresearch/sam
 ```Bash
 python -m pip install einops triton-windows pycocotools
 ```
+If `SAM3.1` multiplex propagation later fails on Windows with errors such as
+`No available kernel. Aborting execution!`, see the replacement-file workaround in
+[`windows_sam31_workaround/README.md`](windows_sam31_workaround/README.md).
 8. Install napari-sam3-assistant
 ```Bash
 python -m pip install napari-sam3-assistant
@@ -153,16 +161,17 @@ python -m pip install torch torchvision torchaudio --index-url https://download.
 python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
 ```
 5. Install SAM3
+
 ```Bash
 git clone https://github.com/facebookresearch/sam3.git
 cd sam3
 python -m pip install --no-cache-dir -e .
-
+```
 6. Install extra dependencies
 ```Bash
 python -m pip install einops triton pycocotools
-```
 
+```
 7. Install napari-sam3-assistant
 ```Bash
 python -m pip install napari-sam3-assistant
@@ -720,6 +729,30 @@ The installed PyTorch CUDA runtime cannot compile for the detected GPU. Use `CPU
 ### BFloat16 conversion errors
 
 The plugin converts SAM3 `bfloat16` outputs to `float32` before writing NumPy-backed napari layers. If you still see dtype errors, restart napari after changing device mode and run again.
+
+### SAM3.1 `start_session` fails with `unexpected keyword argument 'offload_state_to_cpu'`
+
+This is a plugin/backend API mismatch, not a prompt or data problem.
+
+- The failure happens during `start_session` / `init_state`, before propagation actually begins.
+- The installed `sam3` backend does not accept the keyword that newer plugin code may pass.
+- `napari-sam3-assistant` 4.0.1 keeps a compatibility fix for this case so older installed `sam3` backends can still start a 3D/video session.
+
+If you still see this exact error, first verify that napari is importing the intended local `sam3` install and not an older duplicate environment copy.
+
+### SAM3.1 propagation fails later with `No available kernel. Aborting execution!` on Windows
+
+This is a different issue from the `offload_state_to_cpu` startup mismatch.
+
+- `start_session` succeeds.
+- prompts are accepted.
+- the failure happens only when `SAM3.1` multiplex propagation actually starts.
+
+On some Windows systems using `triton-windows`, this appears to be an upstream `sam3` runtime/kernel path issue rather than a napari prompt-collection bug.
+
+Use the documented replacement-file workaround here:
+
+- [`windows_sam31_workaround/README.md`](windows_sam31_workaround/README.md)
 
 ### Text prompt creates no layer
 
