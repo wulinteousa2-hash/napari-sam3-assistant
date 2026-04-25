@@ -39,11 +39,45 @@ class ComponentTableWidget(QTableWidget):
         self.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.verticalHeader().setVisible(False)
+        self.verticalHeader().setDefaultSectionSize(24)
+        self.verticalHeader().setMinimumSectionSize(22)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.setSortingEnabled(True)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._open_context_menu)
         self.itemDoubleClicked.connect(self._locate_item)
+        self.setStyleSheet(
+            """
+            QTableWidget#componentAnalysisTable {
+                background: #1f242c;
+                alternate-background-color: #2a3038;
+                color: #eef2f7;
+                gridline-color: #3b444f;
+                selection-background-color: #2f6f8f;
+                selection-color: #ffffff;
+            }
+            QTableWidget#componentAnalysisTable::item {
+                padding: 3px 4px;
+            }
+            QTableWidget#componentAnalysisTable::item:selected {
+                background: #2f6f8f;
+                color: #ffffff;
+            }
+            QTableWidget#componentAnalysisTable::item:alternate:selected {
+                background: #2f6f8f;
+                color: #ffffff;
+            }
+            QHeaderView::section {
+                background: #333941;
+                color: #f3f6f9;
+                border: 0;
+                border-right: 1px solid #464e59;
+                border-bottom: 1px solid #464e59;
+                padding: 3px 5px;
+                font-weight: 700;
+            }
+            """
+        )
 
     def set_records(self, records: list[ComponentRecord]) -> None:
         self.setSortingEnabled(False)

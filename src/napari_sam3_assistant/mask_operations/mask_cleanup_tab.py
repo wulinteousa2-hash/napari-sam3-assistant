@@ -7,9 +7,12 @@ from qtpy.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QGridLayout,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -251,6 +254,7 @@ class MaskCleanupTab(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout()
+        root.setSpacing(6)
         target_form = QFormLayout()
         self.target_combo = QComboBox()
         self.target_combo.currentIndexChanged.connect(self._on_target_layer_changed)
@@ -285,9 +289,9 @@ class MaskCleanupTab(QWidget):
             delete_callback=self.delete_selected_components,
             locate_callback=self.locate_component,
         )
+        self.component_table.setMinimumHeight(170)
         root.addWidget(self.component_table)
 
-        operations = QFormLayout()
         self.min_size_spin = QSpinBox()
         self.min_size_spin.setRange(1, 2_147_483_647)
         self.min_size_spin.setValue(64)
@@ -305,17 +309,43 @@ class MaskCleanupTab(QWidget):
         smooth_btn.clicked.connect(self.smooth_mask)
         keep_btn = QPushButton("Keep Largest Object")
         keep_btn.clicked.connect(self.keep_largest_object)
-        operations.addRow("Minimum size", self.min_size_spin)
-        operations.addRow(remove_small_btn)
-        operations.addRow("Hole size", self.hole_size_spin)
-        operations.addRow(fill_btn)
-        operations.addRow("Smoothing radius", self.smoothing_spin)
-        operations.addRow(smooth_btn)
-        operations.addRow(keep_btn)
+        operations = QGridLayout()
+        operations.setHorizontalSpacing(8)
+        operations.setVerticalSpacing(5)
+        self._add_operation_row(operations, 0, "Minimum size", self.min_size_spin, remove_small_btn)
+        self._add_operation_row(operations, 1, "Hole size", self.hole_size_spin, fill_btn)
+        self._add_operation_row(operations, 2, "Smoothing radius", self.smoothing_spin, smooth_btn)
+        operations.addWidget(keep_btn, 3, 2)
+        operations.setColumnStretch(2, 1)
         root.addLayout(operations)
 
         self.unique_values_table = QTableWidget(0, 2)
+        self.unique_values_table.setObjectName("maskValueTable")
         self.unique_values_table.setHorizontalHeaderLabels(["Value", "Pixels"])
+        self.unique_values_table.setAlternatingRowColors(True)
+        self.unique_values_table.verticalHeader().setDefaultSectionSize(24)
+        self.unique_values_table.verticalHeader().setMinimumSectionSize(22)
+        self.unique_values_table.setMaximumHeight(170)
+        self.unique_values_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        self.unique_values_table.setStyleSheet(
+            """
+            QTableWidget#maskValueTable {
+                background: #1f242c;
+                alternate-background-color: #2a3038;
+                color: #eef2f7;
+                gridline-color: #3b444f;
+                selection-background-color: #2f6f8f;
+                selection-color: #ffffff;
+            }
+            QTableWidget#maskValueTable::item {
+                padding: 3px 4px;
+            }
+            QTableWidget#maskValueTable::item:selected {
+                background: #2f6f8f;
+                color: #ffffff;
+            }
+            """
+        )
         root.addWidget(self.unique_values_table)
         relabel_form = QFormLayout()
         self.values_to_replace_edit = QLineEdit()
@@ -335,6 +365,22 @@ class MaskCleanupTab(QWidget):
         relabel_form.addRow(relabel_buttons)
         root.addLayout(relabel_form)
         self.setLayout(root)
+
+    def _add_operation_row(
+        self,
+        layout: QGridLayout,
+        row: int,
+        label_text: str,
+        spin_box: QSpinBox,
+        button: QPushButton,
+    ) -> None:
+        label = QLabel(label_text)
+        spin_box.setMinimumWidth(84)
+        spin_box.setMaximumWidth(140)
+        button.setMinimumWidth(180)
+        layout.addWidget(label, row, 0)
+        layout.addWidget(spin_box, row, 1)
+        layout.addWidget(button, row, 2)
 
     def _target_layer(self):
         return safe_get_layer(self.viewer, self.target_combo.currentData())

@@ -2,6 +2,13 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.0.2
+
+### Fixed
+
+- Improved Mask Cleanup table contrast so selected rows remain readable.
+- Compacted Mask Cleanup size, hole-fill, and smoothing controls to reduce vertical scrolling.
+
 ## 4.0.1
 
 Small compatibility release focused on SAM3.1 3D/video troubleshooting.
