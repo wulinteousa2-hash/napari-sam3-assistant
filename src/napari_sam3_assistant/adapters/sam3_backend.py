@@ -135,7 +135,8 @@ class Sam3Adapter:
         *,
         cache_context: dict[str, Any] | None = None,
     ) -> Sam3Result:
-        needs_interactivity = bool(bundle.points or bundle.masks)
+        use_box_instance_prompts = self._uses_2d_box_instance_prompts(bundle)
+        needs_interactivity = bool(bundle.points or bundle.masks or use_box_instance_prompts)
         if self.image_processor is None:
             self.load_image(enable_instance_interactivity=needs_interactivity)
         elif needs_interactivity and not self._has_instance_interactivity():
@@ -153,16 +154,19 @@ class Sam3Adapter:
                 if bundle.task == Sam3Task.TEXT and self._mask_count(state.get("masks")) == 0:
                     state = self._retry_text_prompt_with_lower_thresholds(prompt, state)
 
-            mapper = CoordinateMapper(bundle.image)
-            image_hw = rgb.shape[:2]
-            for box in bundle.boxes:
-                normalized = mapper.box_to_normalized_cxcywh(box, image_hw)
-                state = self._add_geometric_prompt(
-                    list(normalized),
-                    box.polarity == PromptPolarity.POSITIVE,
-                    state=state,
-                )
-                self._normalize_state_tensors(state)
+            if use_box_instance_prompts:
+                state = self._run_2d_box_instance_prompts(rgb, bundle, state)
+            else:
+                mapper = CoordinateMapper(bundle.image)
+                image_hw = rgb.shape[:2]
+                for box in bundle.boxes:
+                    normalized = mapper.box_to_normalized_cxcywh(box, image_hw)
+                    state = self._add_geometric_prompt(
+                        list(normalized),
+                        box.polarity == PromptPolarity.POSITIVE,
+                        state=state,
+                    )
+                    self._normalize_state_tensors(state)
 
             if bundle.points or bundle.masks:
                 self._normalize_state_tensors(state)
@@ -267,6 +271,14 @@ class Sam3Adapter:
         self.video_session = session
         return session
 
+    def _uses_2d_box_instance_prompts(self, bundle: PromptBundle) -> bool:
+        return (
+            bundle.task == Sam3Task.SEGMENT_2D
+            and bool(bundle.boxes)
+            and not (bundle.text and bundle.text.text)
+            and not bundle.points
+            and not bundle.masks
+        )
     def _install_video_backend_compatibility(self) -> None:
         predictor = self.video_predictor
         if predictor is None:
@@ -556,6 +568,93 @@ class Sam3Adapter:
         state["scores"] = np.asarray(scores)
         state["masks_logits"] = np.asarray(low_res)
         return state
+
+    def _run_2d_box_instance_prompts(
+        self,
+        rgb: np.ndarray,
+        bundle: PromptBundle,
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        predictor = getattr(self.image_model, "inst_interactive_predictor", None)
+        tracker_model = getattr(predictor, "model", None)
+        if predictor is None or tracker_model is None:
+            raise RuntimeError(
+                "SAM3 box prompting is unavailable: the local image model did not "
+                "construct a usable interactive predictor."
+            )
+
+        mapper = CoordinateMapper(bundle.image)
+        masks_by_box: list[np.ndarray] = []
+        scores_by_box: list[float] = []
+        boxes_xyxy: list[np.ndarray] = []
+        logits_by_box: list[np.ndarray] = []
+        image_hw = rgb.shape[:2]
+
+        for prompt_box in bundle.boxes:
+            box_xyxy = np.asarray([mapper.box_to_xyxy(prompt_box)], dtype=np.float32)
+            box_state = self._clone_state(state)
+            masks, scores, low_res = self.image_model.predict_inst(
+                box_state,
+                point_coords=None,
+                point_labels=None,
+                box=box_xyxy,
+                mask_input=None,
+                multimask_output=False,
+                normalize_coords=True,
+            )
+            mask = self._first_mask_from_prediction(masks)
+            if mask is None:
+                continue
+            masks_by_box.append(self._clip_mask_to_box(mask, prompt_box, image_hw))
+            score_array = np.asarray(scores, dtype=np.float32).reshape(-1)
+            scores_by_box.append(float(score_array[0]) if score_array.size else 0.0)
+            low_res_array = np.asarray(low_res)
+            if low_res_array.size:
+                logits_by_box.append(np.asarray(low_res_array[0]))
+            boxes_xyxy.append(np.asarray(box_xyxy[0], dtype=np.float32))
+
+        state["masks"] = (
+            np.stack(masks_by_box, axis=0)
+            if masks_by_box
+            else np.zeros((0, *image_hw), dtype=bool)
+        )
+        state["scores"] = np.asarray(scores_by_box, dtype=np.float32)
+        state["boxes"] = (
+            np.stack(boxes_xyxy, axis=0)
+            if boxes_xyxy
+            else np.zeros((0, 4), dtype=np.float32)
+        )
+        if logits_by_box:
+            state["masks_logits"] = np.stack(logits_by_box, axis=0)
+        else:
+            state["masks_logits"] = np.zeros((0,), dtype=np.float32)
+        return state
+
+    def _first_mask_from_prediction(self, masks: Any) -> np.ndarray | None:
+        mask_array = np.asarray(masks)
+        if mask_array.size == 0:
+            return None
+        if mask_array.ndim == 4 and mask_array.shape[1] == 1:
+            mask_array = mask_array[:, 0]
+        if mask_array.ndim == 3:
+            return np.asarray(mask_array[0]).astype(bool)
+        if mask_array.ndim == 2:
+            return np.asarray(mask_array).astype(bool)
+        return None
+
+    def _clip_mask_to_box(
+        self,
+        mask: np.ndarray,
+        prompt_box: Any,
+        image_hw: tuple[int, int],
+    ) -> np.ndarray:
+        clipped = np.zeros(image_hw, dtype=bool)
+        y0 = max(0, min(image_hw[0], int(np.floor(float(prompt_box.y0)))))
+        x0 = max(0, min(image_hw[1], int(np.floor(float(prompt_box.x0)))))
+        y1 = max(y0, min(image_hw[0], int(np.ceil(float(prompt_box.y1)))))
+        x1 = max(x0, min(image_hw[1], int(np.ceil(float(prompt_box.x1)))))
+        clipped[y0:y1, x0:x1] = np.asarray(mask, dtype=bool)[y0:y1, x0:x1]
+        return clipped
 
     def _set_text_prompt(self, prompt: str, state: dict[str, Any]) -> dict[str, Any]:
         if self._resolved_device(allow_cpu_fallback=True) != "cpu":

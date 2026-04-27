@@ -2,6 +2,12 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.0.3
+
+### Fixed
+
+- Fixed 2D box-only preview prompting so it uses instance box segmentation instead of grounding-style box prompting.
+- Fixed 2D box-only preview masks to stay inside each prompted box, making 2D box behavior distinct from exemplar prompting.
 ## 4.0.2
 
 ### Fixed

@@ -279,6 +279,87 @@ def test_sam31_checkpoint_rejects_current_2d_image_loader():
         raise AssertionError("Expected SAM3.1 image loading to fail clearly")
 
 
+def test_2d_box_prompts_use_instance_predictor_and_clip_masks(monkeypatch):
+    class InteractiveModel:
+        def __init__(self):
+            self.calls = []
+            self.inst_interactive_predictor = types.SimpleNamespace(model=object())
+
+        def predict_inst(
+            self,
+            state,
+            *,
+            point_coords,
+            point_labels,
+            box,
+            mask_input,
+            multimask_output,
+            normalize_coords,
+        ):
+            self.calls.append(
+                {
+                    "point_coords": point_coords,
+                    "point_labels": point_labels,
+                    "box": np.asarray(box),
+                    "multimask_output": multimask_output,
+                    "normalize_coords": normalize_coords,
+                }
+            )
+            mask = np.ones((1, 10, 20), dtype=bool)
+            scores = np.asarray([0.9], dtype=np.float32)
+            low_res = np.zeros((1, 10, 20), dtype=np.float32)
+            return mask, scores, low_res
+
+    adapter = Sam3Adapter()
+    adapter.image_model = InteractiveModel()
+    adapter.image_processor = object()
+    monkeypatch.setattr(adapter, "_initial_state_for_image", lambda rgb, bundle, cache_context=None: {})
+    monkeypatch.setattr(adapter, "_add_geometric_prompt", lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("2D box-only prompts should not use geometric grounding")
+    ))
+
+    selection = infer_image_selection("image", (10, 20))
+    bundle = PromptBundle(
+        task=Sam3Task.SEGMENT_2D,
+        image=selection,
+        boxes=[
+            BoxPrompt(y0=1, x0=2, y1=4, x1=5),
+            BoxPrompt(y0=6, x0=10, y1=9, x1=14),
+        ],
+    )
+
+    result = adapter.run_image(np.zeros((10, 20), dtype=np.uint8), bundle)
+
+    assert len(adapter.image_model.calls) == 2
+    np.testing.assert_array_equal(
+        adapter.image_model.calls[0]["box"],
+        np.asarray([[2.0, 1.0, 5.0, 4.0]], dtype=np.float32),
+    )
+    np.testing.assert_array_equal(
+        adapter.image_model.calls[1]["box"],
+        np.asarray([[10.0, 6.0, 14.0, 9.0]], dtype=np.float32),
+    )
+    assert adapter.image_model.calls[0]["multimask_output"] is False
+    assert adapter.image_model.calls[0]["normalize_coords"] is True
+    assert result.masks.shape == (2, 10, 20)
+    assert result.labels.shape == (10, 20)
+    assert np.all(result.masks[0, 1:4, 2:5])
+    assert not np.any(result.masks[0, :1, :])
+    assert not np.any(result.masks[0, 4:, :])
+    assert not np.any(result.masks[0, :, :2])
+    assert not np.any(result.masks[0, :, 5:])
+    assert np.all(result.masks[1, 6:9, 10:14])
+    assert not np.any(result.masks[1, :6, :])
+    assert not np.any(result.masks[1, 9:, :])
+    assert not np.any(result.masks[1, :, :10])
+    assert not np.any(result.masks[1, :, 14:])
+    np.testing.assert_array_equal(
+        result.boxes_xyxy,
+        np.asarray([[2.0, 1.0, 5.0, 4.0], [10.0, 6.0, 14.0, 9.0]], dtype=np.float32),
+    )
+    np.testing.assert_array_equal(result.object_ids, np.asarray([1, 2]))
+
+
 def test_video_point_prompt_request_uses_normalized_points_and_object_id():
     requests = []
 

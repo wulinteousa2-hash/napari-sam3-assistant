@@ -15,13 +15,15 @@ The plugin focuses on task-based segmentation workflows:
 - Live Points with positive and negative prompts
 - downstream mask cleanup, merge, and export operations
 
-## What's New in 4.0.1
+## What's New in 4.0.3
 
-Version 4.0.1 keeps the 4.0 workflow update and adds a small SAM3.1 compatibility follow-up:
+Version 4.0.3 keeps the 4.0 workflow update and clarifies the difference between 2D box prompting and exemplar prompting:
 
-- Keeps the plugin-side fix for the earlier `SAM3.1` `start_session` crash where some installed `sam3` backends rejected `offload_state_to_cpu` during `init_state()`.
-- Documents the separate Windows-only `SAM3.1` multiplex runtime workaround for later `No available kernel. Aborting execution!` propagation failures.
+- `2D` box-only preview now segments inside each prompted box instead of behaving like exemplar-style visual matching.
+- `Exemplar` box prompts still use the boxed examples to find and segment similar objects outside the original boxes.
+- More patch-level release details are documented in [CHANGELOG.md](CHANGELOG.md).
 
+## What's New in 4.0.0
 Version 4.0.0 was a workflow release focused on the new Simple mode and a cleaner Advanced mode.
 
 - New `Simple` mode for common imaging tasks with a compact one-column layout.
@@ -68,13 +70,9 @@ If CUDA is not available or not compatible, select **CPU** in the widget.
    - **Miniforge Prompt**
    - **PowerShell**
 
-
 3. Create and activate the environment
 ```Bash
-
-=======
 conda create -n napari-sam3 python=3.11 -y
-
 conda activate napari-sam3
 ```
 4. Install base Python tools and napari
@@ -97,6 +95,9 @@ python -m pip install torch torchvision torchaudio --index-url https://download.
 ```
 6. Install SAM3
 
+Choose one:
+
+Option A. Install from a local clone
 ```bash
 git clone https://github.com/facebookresearch/sam3.git
 cd sam3
@@ -170,7 +171,6 @@ python -m pip install --no-cache-dir -e .
 6. Install extra dependencies
 ```Bash
 python -m pip install einops triton pycocotools
-
 ```
 7. Install napari-sam3-assistant
 ```Bash
@@ -449,7 +449,7 @@ If the result says `objects=0`, SAM3 ran but did not return masks above threshol
 
 ### 2D Segmentation With Boxes
 
-Use boxes to identify the target object or concept.
+Use boxes to segment the target region inside each drawn box.
 
 Workflow:
 
@@ -459,7 +459,7 @@ Workflow:
 4. Draw one or more rectangles in the `SAM3 boxes` Shapes layer.
 5. Click `Run Preview`.
 
-The output appears in preview layers.
+Each 2D box preview writes segmentation only inside the corresponding drawn box. This is different from `Exemplar segmentation`, which uses boxed examples to find and segment similar objects outside the original boxes.
 
 ### Exemplar Segmentation
 
@@ -736,7 +736,7 @@ This is a plugin/backend API mismatch, not a prompt or data problem.
 
 - The failure happens during `start_session` / `init_state`, before propagation actually begins.
 - The installed `sam3` backend does not accept the keyword that newer plugin code may pass.
-- `napari-sam3-assistant` 4.0.1 keeps a compatibility fix for this case so older installed `sam3` backends can still start a 3D/video session.
+- The plugin includes compatibility handling for this case so older installed `sam3` backends can still start a 3D/video session.
 
 If you still see this exact error, first verify that napari is importing the intended local `sam3` install and not an older duplicate environment copy.
 
@@ -750,7 +750,7 @@ This is a different issue from the `offload_state_to_cpu` startup mismatch.
 
 On some Windows systems using `triton-windows`, this appears to be an upstream `sam3` runtime/kernel path issue rather than a napari prompt-collection bug.
 
-Use the documented replacement-file workaround here:
+Use the documented Windows workaround here:
 
 - [`windows_sam31_workaround/README.md`](windows_sam31_workaround/README.md)
 
