@@ -162,6 +162,38 @@ def extract_2d_image(data: np.ndarray, selection: ImageSelection) -> np.ndarray:
     return np.asarray(sliced)
 
 
+def selection_image_hw(selection: ImageSelection) -> tuple[int, int]:
+    y_axis, x_axis = selection.spatial_axes
+    return int(selection.data_shape[y_axis]), int(selection.data_shape[x_axis])
+
+
+def selection_frame_count(selection: ImageSelection) -> int:
+    if selection.frame_axis is None:
+        return 1
+    return int(selection.data_shape[selection.frame_axis])
+
+
+def selection_video_output_shape(selection: ImageSelection) -> tuple[int, int, int]:
+    height, width = selection_image_hw(selection)
+    return (selection_frame_count(selection), height, width)
+
+
+def extract_video_frame_image(
+    data: np.ndarray,
+    selection: ImageSelection,
+    frame_index: int,
+) -> np.ndarray:
+    arr = np.asarray(base_image_data(data))
+    if selection.frame_axis is None:
+        return np.asarray(extract_2d_image(arr, selection))
+
+    index: list[int | slice] = [slice(None)] * arr.ndim
+    index[selection.frame_axis] = int(frame_index)
+    frame_data = np.asarray(arr[tuple(index)])
+    frame_selection = _selection_without_axis(selection, selection.frame_axis, frame_data.shape)
+    return np.asarray(extract_2d_image(frame_data, frame_selection))
+
+
 def extract_2d_roi(
     data: np.ndarray,
     selection: ImageSelection,
@@ -200,6 +232,32 @@ def base_image_data(data):
 def _base_image_data(data):
     """Backward-compatible alias for older imports."""
     return base_image_data(data)
+
+
+def _selection_without_axis(
+    selection: ImageSelection,
+    removed_axis: int,
+    data_shape: tuple[int, ...],
+) -> ImageSelection:
+    def remap(axis: int | None) -> int | None:
+        if axis is None:
+            return None
+        if axis == removed_axis:
+            return None
+        return axis - 1 if axis > removed_axis else axis
+
+    return ImageSelection(
+        layer_name=selection.layer_name,
+        data_shape=tuple(int(v) for v in data_shape),
+        frame_axis=None,
+        channel_axis=remap(selection.channel_axis),
+        spatial_axes=(
+            int(remap(selection.spatial_axes[0])),
+            int(remap(selection.spatial_axes[1])),
+        ),
+        frame_index=None,
+        channel_index=selection.channel_index,
+    )
 
 
 def centered_roi_bounds(

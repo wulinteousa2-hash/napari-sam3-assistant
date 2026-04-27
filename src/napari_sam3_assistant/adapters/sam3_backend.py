@@ -15,7 +15,13 @@ from PIL import Image
 import torch
 from torch import nn
 
-from ..core.coordinates import CoordinateMapper, extract_2d_image, to_rgb_uint8
+from ..core.coordinates import (
+    CoordinateMapper,
+    extract_2d_image,
+    extract_video_frame_image,
+    selection_image_hw,
+    to_rgb_uint8,
+)
 from ..core.models import PromptBundle, PromptPolarity, Sam3Result, Sam3Session, Sam3Task
 
 
@@ -937,7 +943,7 @@ class Sam3Adapter:
         outputs = response.get("outputs", {})
         masks = self._to_numpy(outputs.get("out_binary_masks"))
         boxes_xywh = self._to_numpy(outputs.get("out_boxes_xywh"))
-        boxes = self._video_boxes_xywh_to_xyxy(boxes_xywh, bundle.image.data_shape)
+        boxes = self._video_boxes_xywh_to_xyxy(boxes_xywh, bundle.image)
         object_ids = self._to_numpy(outputs.get("out_obj_ids"))
         scores = self._to_numpy(outputs.get("out_probs"))
         return Sam3Result(
@@ -958,30 +964,22 @@ class Sam3Adapter:
         bundle: PromptBundle,
         output_dir: Path,
     ) -> None:
-        arr = np.asarray(stack_data)
-        frame_axis = bundle.image.frame_axis
-        if frame_axis is None:
-            frames = arr[None, ...]
-        else:
-            frames = np.moveaxis(arr, frame_axis, 0)
-
-        for idx, frame in enumerate(frames):
-            frame_2d = np.asarray(frame)
-            if bundle.image.channel_axis is not None and frame_2d.ndim > 2:
-                frame_2d = frame_2d[bundle.image.channel_index or 0]
-            while frame_2d.ndim > 2 and frame_2d.shape[-1] not in (3, 4):
-                frame_2d = frame_2d[0]
-            rgb = to_rgb_uint8(frame_2d)
+        frame_count = 1 if bundle.image.frame_axis is None else int(
+            bundle.image.data_shape[bundle.image.frame_axis]
+        )
+        for idx in range(frame_count):
+            frame_2d = extract_video_frame_image(stack_data, bundle.image, idx)
+            rgb = to_rgb_uint8(np.asarray(frame_2d))
             Image.fromarray(rgb).save(output_dir / f"{idx:06d}.jpg", quality=95)
 
     def _video_boxes_xywh_to_xyxy(
         self,
         boxes_xywh: np.ndarray | None,
-        data_shape: tuple[int, ...],
+        selection: Any,
     ) -> np.ndarray | None:
         if boxes_xywh is None:
             return None
-        height, width = data_shape[-2], data_shape[-1]
+        height, width = selection_image_hw(selection)
         boxes = np.asarray(boxes_xywh, dtype=np.float32).copy()
         x = boxes[:, 0] * width
         y = boxes[:, 1] * height

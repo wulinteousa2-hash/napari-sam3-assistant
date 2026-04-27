@@ -46,6 +46,7 @@ from ...core.coordinates import (
     infer_image_selection,
     localize_bundle_to_roi,
     roi_anchor_from_bundle,
+    selection_video_output_shape,
 )
 from ...core.models import PromptBundle, Sam3Result, Sam3Session, Sam3Task
 from ...providers.sam3_repo_provider import Sam3RepoProvider
@@ -1533,8 +1534,8 @@ class AdvancedModePanel(QWidget):
             return
         image_layer_name = result.metadata.get("image_layer", self._current_image_layer_name())
         image_layer = self.viewer.layers[image_layer_name]
-        frame_axis = self._current_frame_axis(image_layer.data)
-        output_shape = self._video_output_shape(image_layer.data.shape, frame_axis)
+        selection = self._image_selection_for_layer(image_layer)
+        output_shape = selection_video_output_shape(selection)
         self.layer_writer.write_video_frame_result(
             result,
             output_shape,
@@ -2598,18 +2599,17 @@ class AdvancedModePanel(QWidget):
                 combo.setCurrentIndex(index)
         combo.blockSignals(False)
 
-    def _current_frame_axis(self, data: Any) -> int | None:
-        ndim = len(data.shape)
-        return ndim - 3 if ndim >= 3 else None
-
-    def _video_output_shape(
-        self,
-        image_shape: tuple[int, ...],
-        frame_axis: int | None,
-    ) -> tuple[int, int, int]:
-        if frame_axis is None:
-            return (1, image_shape[-2], image_shape[-1])
-        return (image_shape[frame_axis], image_shape[-2], image_shape[-1])
+    def _image_selection_for_layer(self, image_layer: Any):
+        if self.viewer is None:
+            raise RuntimeError("No napari viewer was provided to the widget.")
+        channel_axis = self.channel_axis_spin.value()
+        base_data = self._base_layer_data(image_layer.data)
+        return infer_image_selection(
+            layer_name=image_layer.name,
+            data_shape=tuple(base_data.shape),
+            dims_current_step=tuple(self.viewer.dims.current_step),
+            channel_axis=None if channel_axis < 0 else channel_axis,
+        )
 
     def _result_summary(self, result: Sam3Result) -> str:
         count = self._result_count(result)

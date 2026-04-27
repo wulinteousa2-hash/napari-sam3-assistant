@@ -15,6 +15,14 @@ The plugin focuses on task-based segmentation workflows:
 - Live Points with positive and negative prompts
 - downstream mask cleanup, merge, and export operations
 
+## What's New in 4.0.4
+
+Version 4.0.4 fixes a `3D/video` stack-axis bug that could mis-handle RGB-like or multichannel data during propagation:
+
+- `3D/video` propagation now uses the selected image axes more consistently when exporting frames to SAM3, drawing propagated boxes, and writing propagated labels back into napari.
+- This patch is meant to keep multichannel and RGB-like stack behavior aligned with the image the user actually selected in napari.
+- More patch-level release details are documented in [CHANGELOG.md](CHANGELOG.md).
+
 ## What's New in 4.0.3
 
 Version 4.0.3 keeps the 4.0 workflow update and clarifies the difference between 2D box prompting and exemplar prompting:

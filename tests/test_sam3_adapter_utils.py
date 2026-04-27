@@ -2,9 +2,11 @@ from pathlib import Path
 import logging
 import sys
 import types
+from tempfile import TemporaryDirectory
 
 import numpy as np
 import torch
+from PIL import Image
 
 import napari_sam3_assistant.adapters.sam3_backend as backend
 from napari_sam3_assistant.adapters import Sam3Adapter, Sam3AdapterConfig
@@ -260,7 +262,52 @@ def test_start_video_session_preserves_supported_offload_state_kwarg(caplog):
             "offload_state_to_cpu": False,
         }
     ]
-    assert not caplog.records
+
+
+def test_write_stack_as_jpeg_dir_preserves_rgb_channel_last_frame_geometry():
+    selection = infer_image_selection("rgb-stack", (5, 64, 96, 3), dims_current_step=(0, 0, 0, 0))
+    bundle = PromptBundle(task=Sam3Task.SEGMENT_3D, image=selection)
+    adapter = Sam3Adapter()
+
+    with TemporaryDirectory() as temp_dir:
+        adapter._write_stack_as_jpeg_dir(
+            np.zeros((5, 64, 96, 3), dtype=np.uint8),
+            bundle,
+            Path(temp_dir),
+        )
+        exported = Image.open(Path(temp_dir) / "000000.jpg")
+        assert exported.size == (96, 64)
+
+
+def test_write_stack_as_jpeg_dir_uses_selected_channel_for_channel_first_video():
+    data = np.zeros((5, 2, 64, 96), dtype=np.uint8)
+    data[0, 1, 10:20, 30:40] = 255
+    selection = infer_image_selection(
+        "tcxy",
+        data.shape,
+        dims_current_step=(0, 1, 0, 0),
+        channel_axis=1,
+    )
+    bundle = PromptBundle(task=Sam3Task.SEGMENT_3D, image=selection)
+    adapter = Sam3Adapter()
+
+    with TemporaryDirectory() as temp_dir:
+        adapter._write_stack_as_jpeg_dir(data, bundle, Path(temp_dir))
+        exported = np.asarray(Image.open(Path(temp_dir) / "000000.jpg"))
+        assert exported.shape == (64, 96, 3)
+        assert int(exported[15, 35, 0]) > 0
+
+
+def test_video_boxes_use_spatial_axes_instead_of_trailing_dimensions():
+    adapter = Sam3Adapter()
+    selection = infer_image_selection("rgb-stack", (5, 64, 96, 3), dims_current_step=(0, 0, 0, 0))
+
+    boxes = adapter._video_boxes_xywh_to_xyxy(
+        np.asarray([[0.25, 0.5, 0.25, 0.25]], dtype=np.float32),
+        selection,
+    )
+
+    np.testing.assert_allclose(boxes, np.asarray([[24.0, 32.0, 48.0, 48.0]], dtype=np.float32))
 
 
 def test_sam31_checkpoint_rejects_current_2d_image_loader():

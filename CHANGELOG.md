@@ -2,6 +2,13 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.0.4
+
+### Fixed
+
+- Fixed `3D/video` propagation axis handling for RGB-like and multichannel stacks so frame export, propagated labels, and box coordinates stay aligned with the selected image axes.
+- Added regression tests for channel-last RGB stacks and explicit channel-axis video stacks to reduce the risk of future `3D/video` axis regressions.
+
 ## 4.0.3
 
 ### Fixed

@@ -6,10 +6,14 @@ from napari_sam3_assistant.core.coordinates import (
     centered_roi_bounds,
     extract_2d_image,
     extract_2d_roi,
+    extract_video_frame_image,
     globalize_result_arrays,
     infer_image_selection,
     localize_bundle_to_roi,
     roi_anchor_from_bundle,
+    selection_frame_count,
+    selection_image_hw,
+    selection_video_output_shape,
     to_rgb_uint8,
 )
 from napari_sam3_assistant.core.models import BoxPrompt, MaskPrompt, PointPrompt, PromptBundle, Sam3Task
@@ -45,6 +49,18 @@ def test_stack_rgb_selection_uses_leading_frame_axis():
     assert selection.spatial_axes == (1, 2)
 
 
+def test_selection_video_output_shape_uses_image_selection_axes():
+    selection = infer_image_selection(
+        "rgb-stack",
+        (5, 64, 96, 3),
+        dims_current_step=(3, 0, 0, 0),
+    )
+
+    assert selection_frame_count(selection) == 5
+    assert selection_image_hw(selection) == (64, 96)
+    assert selection_video_output_shape(selection) == (5, 64, 96)
+
+
 def test_extract_2d_image_preserves_trailing_rgb_channels():
     data = np.zeros((4, 8, 9, 3), dtype=np.uint8)
     data[2, :, :, 1] = 255
@@ -58,6 +74,37 @@ def test_extract_2d_image_preserves_trailing_rgb_channels():
 
     assert extracted.shape == (8, 9, 3)
     assert extracted[..., 1].max() == 255
+
+
+def test_extract_video_frame_image_preserves_rgb_channel_last_stack():
+    data = np.zeros((4, 8, 9, 3), dtype=np.uint8)
+    data[2, :, :, 1] = 255
+    selection = infer_image_selection(
+        "rgb-stack",
+        data.shape,
+        dims_current_step=(2, 0, 0, 0),
+    )
+
+    extracted = extract_video_frame_image(data, selection, 2)
+
+    assert extracted.shape == (8, 9, 3)
+    assert extracted[..., 1].max() == 255
+
+
+def test_extract_video_frame_image_uses_selected_channel_for_channel_first_stack():
+    data = np.zeros((4, 2, 8, 9), dtype=np.uint8)
+    data[1, 1, 2:5, 3:7] = 11
+    selection = infer_image_selection(
+        "tcxy",
+        data.shape,
+        dims_current_step=(1, 1, 0, 0),
+        channel_axis=1,
+    )
+
+    extracted = extract_video_frame_image(data, selection, 1)
+
+    assert extracted.shape == (8, 9)
+    assert int(extracted[3, 4]) == 11
 
 
 def test_extract_2d_roi_preserves_trailing_singleton_channel():
