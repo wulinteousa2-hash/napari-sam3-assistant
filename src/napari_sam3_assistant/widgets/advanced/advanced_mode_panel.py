@@ -1,6 +1,8 @@
 from __future__ import annotations
 import csv
+import gc
 from pathlib import Path
+import re
 from typing import Any
 
 import numpy as np
@@ -8,8 +10,8 @@ from napari import current_viewer
 from napari.layers import Image, Labels, Points, Shapes
 from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
-from qtpy.QtGui import QKeySequence
-from qtpy.QtCore import QSettings, Qt
+from qtpy.QtGui import QDesktopServices, QKeySequence
+from qtpy.QtCore import QSettings, Qt, QUrl
 from qtpy.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -55,6 +57,7 @@ from ...services.layer_writer import LayerWriter
 from ...services.prompt_collector import PromptCollector
 from ...services.prompt_state_service import PromptStateService
 from ...mask_operations import MaskOperationsPanel
+from ...mask_operations.export_service import MaskExportService
 from ..collapsible_panel import CollapsiblePanel
 from ..live_point_refinement import LivePointRefinementController
 from ..shared.activity_status_controller import ActivityStatusController
@@ -367,6 +370,7 @@ class AdvancedModePanel(QWidget):
             if shared_context is not None and shared_context.layer_writer is not None
             else LayerWriter(self.viewer) if self.viewer is not None else None
         )
+        self.mask_export_service = MaskExportService()
 
         self.adapter: Sam3Adapter | None = (
             shared_context.adapter if shared_context is not None else None
@@ -380,6 +384,7 @@ class AdvancedModePanel(QWidget):
         self._active_rois: dict[str, RoiBounds] = (
             shared_context.active_rois if shared_context is not None else {}
         )
+        self._last_quick_mask_path: Path | None = None
         self.settings = (
             shared_context.settings
             if shared_context is not None and shared_context.settings is not None
@@ -451,7 +456,7 @@ class AdvancedModePanel(QWidget):
         left_column.addWidget(CollapsiblePanel("Step 2. Task Setup", task_group, collapsed=False))
         left_column.addWidget(CollapsiblePanel("Step 3. Prompt Tools", prompt_group, collapsed=False))
         
-        right_column.addWidget(CollapsiblePanel("Step 4. Run", actions_group, collapsed=False))
+        right_column.addWidget(CollapsiblePanel("Step 4. Run and Save", actions_group, collapsed=False))
         right_column.addWidget(CollapsiblePanel("Step 5. Results", results_group, collapsed=False))
 
         self.status_box = QTextEdit()
@@ -528,7 +533,9 @@ class AdvancedModePanel(QWidget):
 
     def _set_live_refinement_status(self, text: str) -> None:
         if hasattr(self, "live_refinement_status_label"):
-            self.live_refinement_status_label.setText(text)
+            display_text = text if len(text) <= 72 else f"{text[:69]}..."
+            self.live_refinement_status_label.setText(display_text)
+            self.live_refinement_status_label.setToolTip(text)
 
     def _live_refinement_enabled(self) -> bool:
         return (
@@ -847,6 +854,14 @@ class AdvancedModePanel(QWidget):
         group = self._step_group("Run preview or propagation")
         layout = QVBoxLayout()
 
+        self.live_refinement_status_label = QLabel("Activity: idle")
+        self.live_refinement_status_label.setObjectName("activityIndicator")
+        self.live_refinement_status_label.setMaximumWidth(460)
+        self.live_refinement_status_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.live_refinement_status_label.setToolTip(
+            "Shows Live Points and SAM3 worker activity so long model runs are visible."
+        )
+
         row = QHBoxLayout()
         self.run_btn = QPushButton("Run Preview")
         self.run_btn.setObjectName("runButton")
@@ -874,16 +889,81 @@ class AdvancedModePanel(QWidget):
         row.addWidget(clear_preview_btn)
         row.addWidget(cancel_btn)
 
-        self.live_refinement_status_label = QLabel("Activity: idle")
-        self.live_refinement_status_label.setObjectName("activityIndicator")
-        self.live_refinement_status_label.setToolTip(
-            "Shows Live Points and SAM3 worker activity so long model runs are visible."
-        )
-
-        layout.addLayout(row)
         layout.addWidget(self.live_refinement_status_label)
+        layout.addLayout(row)
+        layout.addWidget(self._build_preview_output_group())
         group.setLayout(layout)
         return group
+
+    def _build_preview_output_group(self) -> QFrame:
+        frame = QFrame()
+        self.preview_output_panel = frame
+        frame.setObjectName("previewOutputPanel")
+        layout = QFormLayout()
+        layout.setContentsMargins(0, 6, 0, 0)
+
+        self.preview_output_folder_edit = QLineEdit()
+        self.preview_output_folder_edit.setPlaceholderText("Choose an output folder")
+        self.preview_output_folder_edit.setMinimumWidth(0)
+        self.preview_output_folder_edit.setMaximumWidth(260)
+        self.preview_output_folder_edit.editingFinished.connect(self._save_settings)
+        self.preview_output_browse_btn = QPushButton("Choose")
+        self.preview_output_browse_btn.setToolTip("Choose where quick-acquired preview masks are saved.")
+        self.preview_output_browse_btn.clicked.connect(self._browse_preview_output_folder)
+        folder_row = QHBoxLayout()
+        folder_row.addWidget(self.preview_output_folder_edit)
+        folder_row.addWidget(self.preview_output_browse_btn)
+
+        self.preview_output_format_combo = QComboBox()
+        self.preview_output_format_combo.addItems(["TIFF", "NumPy (.npy)", "PNG"])
+        self.preview_output_format_combo.setMaximumWidth(160)
+        self.preview_output_format_combo.currentTextChanged.connect(self._on_preview_output_format_changed)
+
+        self.preview_output_filename_edit = QLineEdit()
+        self.preview_output_filename_edit.setMinimumWidth(0)
+        self.preview_output_filename_edit.setMaximumWidth(260)
+        self.preview_output_filename_edit.setToolTip(
+            "Filename for the current preview mask. The extension is added from the selected format."
+        )
+
+        self.save_release_btn = QPushButton("Save && Clean")
+        self.save_release_btn.setObjectName("saveButton")
+        self.save_release_btn.setToolTip(
+            "Save the preview mask, remove temporary ROI memory, and unload the SAM3 model. "
+            "If Load model when running is checked, the next run reloads automatically."
+        )
+        self.save_release_btn.clicked.connect(self._save_preview_mask_and_release_memory)
+
+        self.saved_preview_path_label = QLabel("")
+        self.saved_preview_path_label.setMinimumWidth(0)
+        self.saved_preview_path_label.setMaximumWidth(220)
+        self.saved_preview_path_label.setWordWrap(False)
+        self.saved_preview_path_label.setVisible(False)
+        self.open_saved_folder_btn = QPushButton("Open Folder")
+        self.open_saved_folder_btn.setToolTip("Open the folder containing the saved mask file.")
+        self.open_saved_folder_btn.clicked.connect(self._open_saved_mask_folder)
+        self.open_saved_folder_btn.setVisible(False)
+
+        save_row = QHBoxLayout()
+        save_row.addWidget(self.save_release_btn)
+        save_row.addStretch(1)
+        self.saved_preview_row = QHBoxLayout()
+        self.saved_preview_row.addWidget(self.saved_preview_path_label)
+        self.saved_preview_row.addWidget(self.open_saved_folder_btn)
+        self.saved_preview_row.addStretch(1)
+
+        self.preview_output_folder_row = folder_row
+        layout.addRow("Preview output", self.preview_output_folder_row)
+        layout.addRow("Format", self.preview_output_format_combo)
+        layout.addRow("Filename", self.preview_output_filename_edit)
+        layout.addRow(save_row)
+        layout.addRow(self.saved_preview_row)
+        self.preview_output_folder_label = layout.labelForField(self.preview_output_folder_row)
+        self.preview_output_format_label = layout.labelForField(self.preview_output_format_combo)
+        self.preview_output_filename_label = layout.labelForField(self.preview_output_filename_edit)
+        frame.setLayout(layout)
+        frame.setVisible(False)
+        return frame
 
     def _build_results_group(self) -> QGroupBox:
         group = self._step_group("Review and save results")
@@ -935,6 +1015,22 @@ class AdvancedModePanel(QWidget):
             self.model_dir_edit.setText(selected)
             self._save_settings()
             self._log(f"Selected model directory: {selected}")
+
+    def _browse_preview_output_folder(self) -> None:
+        current = self.preview_output_folder_edit.text().strip() if hasattr(self, "preview_output_folder_edit") else ""
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "Select preview mask output folder",
+            current or str(Path.home()),
+        )
+        if selected:
+            self.preview_output_folder_edit.setText(selected)
+            self._save_settings()
+            self._update_preview_output_filename()
+
+    def _on_preview_output_format_changed(self, _text: str) -> None:
+        self._save_settings()
+        self._update_preview_output_filename()
 
     def _validate_model_dir(self) -> None:
         model_dir = self.model_dir_edit.text().strip()
@@ -1031,6 +1127,7 @@ class AdvancedModePanel(QWidget):
             self._log(f"Layer selectors refreshed. Viewer layers: {layer_count}.")
         if hasattr(self, "live_point_refinement"):
             self._sync_live_refinement_layer()
+        self._sync_preview_output_controls()
 
     def _on_task_changed(self) -> None:
         task = self._current_task()
@@ -1086,6 +1183,7 @@ class AdvancedModePanel(QWidget):
             self.run_btn.setToolTip("Run the selected SAM3 task and write preview layers.")
             self.propagate_btn.setVisible(False)
             self.propagate_btn.setEnabled(False)
+        self._sync_preview_output_controls()
 
 
     def _sync_model_type_controls(self) -> None:
@@ -1493,6 +1591,8 @@ class AdvancedModePanel(QWidget):
         self._append_result_rows(result)
         self._update_result_visibility(result)
         self.activity_status.set_preview_ready()
+        self._last_quick_mask_path = None
+        self._sync_preview_output_controls()
         self._log(self._result_summary(result))
         self._log_large_image_result_guidance(result)
         self._log_text_result_guidance(result)
@@ -1524,6 +1624,8 @@ class AdvancedModePanel(QWidget):
         self._append_result_rows(result)
         self._update_result_visibility(result)
         self.activity_status.set_preview_ready()
+        self._last_quick_mask_path = None
+        self._sync_preview_output_controls()
         target = f"{image_layer_name} / {prompt}" if prompt else image_layer_name
         self._log(f"{target}: {self._result_summary(result)}")
         self._log_large_image_result_guidance(result)
@@ -1544,6 +1646,8 @@ class AdvancedModePanel(QWidget):
         self._append_result_rows(result)
         self._update_result_visibility(result)
         self.activity_status.set_preview_ready()
+        self._last_quick_mask_path = None
+        self._sync_preview_output_controls()
         self._log(self._result_summary(result))
 
     def _set_video_session(self, session: Sam3Session) -> None:
@@ -1852,6 +1956,15 @@ class AdvancedModePanel(QWidget):
             self.device_combo.blockSignals(old_device_signals)
             self.confidence_threshold_spin.blockSignals(old_threshold_signals)
 
+        output_dir = self.settings.value("quick_mask_output_dir", "", type=str)
+        if hasattr(self, "preview_output_folder_edit"):
+            self.preview_output_folder_edit.setText(output_dir or "")
+        output_format = self.settings.value("quick_mask_output_format", "TIFF", type=str)
+        if hasattr(self, "preview_output_format_combo"):
+            index = self.preview_output_format_combo.findText(output_format)
+            if index >= 0:
+                self.preview_output_format_combo.setCurrentIndex(index)
+
         if (
             self._current_model_type() == "sam3.1"
             and hasattr(self, "task_combo")
@@ -1867,6 +1980,10 @@ class AdvancedModePanel(QWidget):
         self.settings.setValue("confidence_threshold", float(self.confidence_threshold_spin.value()))
         device = self.device_combo.currentData()
         self.settings.setValue("device", device or "")
+        if hasattr(self, "preview_output_folder_edit"):
+            self.settings.setValue("quick_mask_output_dir", self.preview_output_folder_edit.text().strip())
+        if hasattr(self, "preview_output_format_combo"):
+            self.settings.setValue("quick_mask_output_format", self.preview_output_format_combo.currentText())
 
     def _on_model_type_changed(self) -> None:
         self._save_settings()
@@ -2251,9 +2368,238 @@ class AdvancedModePanel(QWidget):
             if self.shared_context is not None:
                 state = self.shared_context.result_visibility.on_preview_layers_cleared()
                 self.shared_context.result_state = state
+            self._last_quick_mask_path = None
+            self._sync_preview_output_controls()
             self._log(f"Cleared {removed} SAM3 preview layer(s). Prompts and saved labels were kept.")
         else:
             self._log("No SAM3 preview layers found to clear.")
+
+    def _sync_preview_output_controls(self) -> None:
+        if not hasattr(self, "save_release_btn"):
+            return
+        preview_layer = self._first_preview_labels_layer()
+        has_preview = preview_layer is not None
+        has_saved_path = self._last_quick_mask_path is not None
+        self.save_release_btn.setEnabled(has_preview and self._worker is None)
+        self.preview_output_filename_edit.setEnabled(has_preview)
+        self.preview_output_format_combo.setEnabled(has_preview)
+        self.preview_output_folder_edit.setEnabled(has_preview)
+        self.preview_output_browse_btn.setEnabled(has_preview)
+        self.save_release_btn.setVisible(has_preview)
+        self.preview_output_filename_edit.setVisible(has_preview)
+        self.preview_output_format_combo.setVisible(has_preview)
+        self.preview_output_folder_edit.setVisible(has_preview)
+        self.preview_output_browse_btn.setVisible(has_preview)
+        self.preview_output_folder_label.setVisible(has_preview)
+        self.preview_output_format_label.setVisible(has_preview)
+        self.preview_output_filename_label.setVisible(has_preview)
+        self.saved_preview_path_label.setVisible(has_saved_path and not has_preview)
+        self.open_saved_folder_btn.setVisible(has_saved_path and not has_preview)
+        if has_saved_path:
+            self.saved_preview_path_label.setText(f"Saved: {self._last_quick_mask_path.name}")
+            self.saved_preview_path_label.setToolTip(str(self._last_quick_mask_path))
+            self.open_saved_folder_btn.setToolTip(str(self._last_quick_mask_path.parent))
+        self.preview_output_panel.setVisible(has_preview or has_saved_path)
+        if has_preview:
+            self._sync_preview_output_formats(preview_layer)
+            self._update_preview_output_filename()
+
+    def _first_preview_labels_layer(self) -> Any | None:
+        if self.viewer is None:
+            return None
+        preferred_names = (
+            "SAM3 preview labels",
+            "SAM3 propagated preview labels",
+        )
+        for name in preferred_names:
+            try:
+                return self.viewer.layers[name]
+            except (KeyError, ValueError):
+                pass
+        for layer in self.viewer.layers:
+            name = getattr(layer, "name", "")
+            if name.startswith("SAM3 preview labels ["):
+                return layer
+        return None
+
+    def _update_preview_output_filename(self) -> None:
+        if not hasattr(self, "preview_output_filename_edit"):
+            return
+        preview_layer = self._first_preview_labels_layer()
+        if preview_layer is None:
+            return
+        folder = Path(self.preview_output_folder_edit.text().strip() or Path.home())
+        base = self._quick_mask_base_name(preview_layer)
+        stem = self._next_quick_mask_stem(base, folder, self.preview_output_format_combo.currentText())
+        self.preview_output_filename_edit.setText(self._filename_for_format(stem, self.preview_output_format_combo.currentText()))
+
+    def _sync_preview_output_formats(self, preview_layer: Any) -> None:
+        previous = self.preview_output_format_combo.currentText()
+        formats = ["TIFF", "NumPy (.npy)"]
+        if np.asarray(preview_layer.data).ndim == 2:
+            formats.append("PNG")
+        current_items = [
+            self.preview_output_format_combo.itemText(index)
+            for index in range(self.preview_output_format_combo.count())
+        ]
+        if current_items != formats:
+            old_signals = self.preview_output_format_combo.blockSignals(True)
+            self.preview_output_format_combo.clear()
+            self.preview_output_format_combo.addItems(formats)
+            index = self.preview_output_format_combo.findText(previous)
+            if index < 0:
+                index = 0
+                if previous == "PNG":
+                    self._log("PNG is only available for 2D masks. Using TIFF for this 3D/video preview.")
+            self.preview_output_format_combo.setCurrentIndex(index)
+            self.preview_output_format_combo.blockSignals(old_signals)
+            self._save_settings()
+
+    def _save_preview_mask_and_release_memory(self) -> None:
+        if self.viewer is None:
+            self._log("No napari viewer was provided to the widget.")
+            return
+        preview = self._first_preview_labels_layer()
+        if preview is None:
+            self._log("No preview Labels layer found to save.")
+            self._sync_preview_output_controls()
+            return
+        output_dir = self.preview_output_folder_edit.text().strip()
+        if not output_dir:
+            selected = QFileDialog.getExistingDirectory(
+                self,
+                "Select preview mask output folder",
+                str(Path.home()),
+            )
+            if not selected:
+                self._log("Choose an output folder before saving the preview mask.")
+                return
+            self.preview_output_folder_edit.setText(selected)
+            output_dir = selected
+        folder = Path(output_dir)
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self._log(f"Cannot create output folder: {exc}")
+            return
+
+        filename = self.preview_output_filename_edit.text().strip()
+        if not filename:
+            self._update_preview_output_filename()
+            filename = self.preview_output_filename_edit.text().strip()
+        target_path = folder / filename
+        data = preview.data.copy()
+        saved_layer_name = self._unique_layer_name(Path(filename).stem)
+        try:
+            exported = self.mask_export_service.export(
+                data,
+                target_path,
+                self.preview_output_format_combo.currentText(),
+            )
+        except Exception as exc:
+            self._log(f"Could not save preview mask: {exc}")
+            return
+        self.viewer.add_labels(data, name=saved_layer_name)
+
+        self._last_quick_mask_path = exported
+        self._save_settings()
+        removed = self._remove_preview_layers()
+        self._release_preview_memory()
+        self._unload_adapter()
+        action = "clean"
+        activity = "Activity: Saved. Model unloaded."
+        self._set_live_refinement_status(activity)
+        if hasattr(self, "live_refinement_status_label"):
+            self.live_refinement_status_label.setToolTip(f"Saved to: {exported}")
+        self._log(
+            f"Saved preview mask to layer '{saved_layer_name}' and file: {exported}. "
+            f"Completed {action}; removed {removed} preview layer(s)."
+        )
+        self._sync_preview_output_controls()
+
+    def _open_saved_mask_folder(self) -> None:
+        if self._last_quick_mask_path is None:
+            self._log("No saved preview mask path is available.")
+            return
+        folder = self._last_quick_mask_path.parent
+        if not folder.exists():
+            self._log(f"Saved mask folder was not found: {folder}")
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
+            self._log(f"Could not open saved mask folder: {folder}")
+
+    def _remove_preview_layers(self) -> int:
+        if self.viewer is None:
+            return 0
+        removed = 0
+        for layer in list(self.viewer.layers):
+            name = getattr(layer, "name", "")
+            if name in {
+                "SAM3 preview labels",
+                "SAM3 preview masks",
+                "SAM3 preview boxes",
+                "SAM3 propagated preview labels",
+            } or name.startswith(("SAM3 preview labels [", "SAM3 preview masks [", "SAM3 preview boxes [")):
+                self.viewer.layers.remove(layer)
+                removed += 1
+        if removed and self.shared_context is not None:
+            state = self.shared_context.result_visibility.on_preview_layers_cleared()
+            self.shared_context.result_state = state
+        return removed
+
+    def _release_preview_memory(self) -> None:
+        gc.collect()
+        try:
+            import torch
+        except Exception:
+            return
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            try:
+                torch.cuda.ipc_collect()
+            except Exception:
+                pass
+
+    def _quick_mask_base_name(self, preview_layer: Any) -> str:
+        image_name = self._current_image_layer_name()
+        preview_name = getattr(preview_layer, "name", "preview_mask")
+        if preview_name.startswith("SAM3 preview labels ["):
+            image_name = preview_name.removeprefix("SAM3 preview labels [").removesuffix("]")
+        base = image_name or preview_name
+        if self._large_image_mode_enabled():
+            base = f"{base}_roi"
+        return f"{self._safe_file_stem(base)}_mask"
+
+    def _next_quick_mask_stem(self, base: str, folder: Path, fmt: str) -> str:
+        for index in range(1, 10000):
+            stem = f"{base}_{index:02d}"
+            if not (folder / self._filename_for_format(stem, fmt)).exists():
+                return stem
+        return f"{base}_9999"
+
+    def _filename_for_format(self, stem: str, fmt: str) -> str:
+        fmt_key = fmt.lower()
+        if fmt_key in {"numpy (.npy)", "npy"}:
+            return f"{Path(stem).stem}.npy"
+        if fmt_key == "png":
+            return f"{Path(stem).stem}.png"
+        return f"{Path(stem).stem}.tif"
+
+    def _safe_file_stem(self, value: str) -> str:
+        stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip()).strip("._")
+        return stem or "sam3_preview_mask"
+
+    def _unique_layer_name(self, base: str) -> str:
+        if self.viewer is None:
+            return base
+        existing = {getattr(layer, "name", "") for layer in self.viewer.layers}
+        if base not in existing:
+            return base
+        for index in range(1, 10000):
+            name = f"{base}_{index:02d}"
+            if name not in existing:
+                return name
+        return f"{base}_9999"
 
     def _save_preview_labels(self) -> None:
         if self.viewer is None:

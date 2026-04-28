@@ -2,6 +2,13 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.1.0
+
+### Added
+
+- Added `Step 4. Run and Save` quick mask acquisition: choose output folder, format, and filename, then `Save & Clean` to save the preview mask, release temporary memory, unload the model, and open the saved folder.
+- Documented tested image coverage for single-channel and RGB `2K x 2K` images, plus single-channel large-image local ROI inference around `60000 x 60000`; RGB large-image local ROI inference is noted as not yet tested.
+
 ## 4.0.4
 
 ### Fixed

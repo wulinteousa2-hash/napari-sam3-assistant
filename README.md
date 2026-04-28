@@ -15,6 +15,19 @@ The plugin focuses on task-based segmentation workflows:
 - Live Points with positive and negative prompts
 - downstream mask cleanup, merge, and export operations
 
+## What's New in 4.1.0
+
+Version 4.1.0 adds a faster `Run and Save` handoff for acquiring masks and continuing segmentation work:
+
+- `Step 4. Run` is now `Step 4. Run and Save`.
+- After a preview is created, users can choose output folder, format, and filename, then click `Save & Clean`.
+- `Save & Clean` saves the preview mask, removes temporary preview layers, releases temporary memory, unloads the model, and leaves an `Open Folder` shortcut.
+- Quick-save formats are `TIFF`, NumPy `.npy`, and `PNG` for 2D masks; 3D/video masks use `TIFF` or NumPy `.npy`.
+- Tested image coverage is documented for single-channel and RGB `2K x 2K` images, plus single-channel large-image local ROI inference around `60000 x 60000`.
+- `3D/video` propagation now uses the selected image axes more consistently when exporting frames to SAM3, drawing propagated boxes, and writing propagated labels back into napari.
+- This patch is meant to keep multichannel and RGB-like stack behavior aligned with the image the user actually selected in napari.
+- More patch-level release details are documented in [CHANGELOG.md](CHANGELOG.md).
+
 ## What's New in 4.0.4
 
 Version 4.0.4 fixes a `3D/video` stack-axis bug that could mis-handle RGB-like or multichannel data during propagation:
@@ -321,9 +334,41 @@ After a Simple preview creates labels, click `Mask Ops` in the Run area to open 
 6. Create a prompt layer if the task needs one.
 7. Click `Run Preview`.
 8. Inspect `SAM3 preview labels`, `SAM3 preview masks`, or `SAM3 preview boxes`.
-9. Open `SAM3 Mask Operations` if you want to save accepted objects, clean masks, merge classes, or export masks.
+9. Use `Save & Clean` in `Step 4. Run and Save` for quick mask acquisition, or open `SAM3 Mask Operations` if you want advanced cleanup, merge, or export controls.
 
 Use `Clear Preview` to remove generated preview layers without deleting prompts or saved labels.
+
+### Run and Save
+
+`Step 4. Run and Save` includes a quick save path for users who want to acquire a mask and immediately continue segmentation.
+
+After a preview is created, choose:
+
+- output folder
+- output format
+- filename
+
+Then click `Save & Clean`.
+
+`Save & Clean`:
+
+- saves the current preview mask as a new napari Labels layer
+- writes the mask file to the selected output folder
+- removes temporary preview layers
+- releases Python / CUDA temporary memory where available
+- unloads the SAM3 model so memory returns closer to baseline
+- leaves an `Open Folder` shortcut for the saved mask location
+
+If `Load model when running` is checked, the next run reloads the model automatically.
+
+Supported quick-save formats:
+
+| Preview type | TIFF | NumPy `.npy` | PNG |
+| --- | --- | --- | --- |
+| 2D mask | Yes | Yes | Yes |
+| 3D/video propagated mask | Yes | Yes | No |
+
+PNG is only offered for 2D masks. For 3D/video outputs, use TIFF stack or NumPy `.npy`.
 
 ### Large-Image Local Inference
 
@@ -372,6 +417,8 @@ Large-image mode OFF: full-image inference.
 Large-image mode ON: local ROI inference (WIDTH x HEIGHT).
 Active ROI bounds: y=Y0:Y1, x=X0:X1.
 ```
+
+For large ROI work, `Save & Clean` is the recommended handoff after a successful preview. It saves the mask, clears temporary preview memory, unloads the model, and lets users continue with another ROI without manually visiting Mask Operations.
 
 ### Batch Multiple 2D Images
 
@@ -629,6 +676,19 @@ Results actions:
 - `Clear Results`: clear the table only.
 - `Copy Clipboard`: copy tab-separated results, including headers, for pasting into Excel or statistics software.
 - `Export CSV`: save the results table to a CSV file.
+
+## Tested Image Coverage
+
+The following image sizes and channel layouts have been exercised with the current workflow:
+
+| Image type | Size / layout | Workflow | Status |
+| --- | --- | --- | --- |
+| Single-channel 2D | about `2048 x 2048` | 2D preview and quick save | Passed |
+| RGB 2D | about `2048 x 2048 x 3` | 2D preview and quick save | Passed |
+| Single-channel large image | about `60000 x 60000` | large-image local ROI inference with quick save and clean | Passed |
+| RGB large image | about `60000 x 60000 x 3` | large-image local ROI inference | Not yet tested |
+
+Large-image coverage means the plugin was used with local ROI inference rather than sending the full image plane to SAM3 at once. Actual memory use depends on ROI size, model type, device, source image backend, and whether napari already holds large arrays in memory.
 
 Label-value merge:
 
