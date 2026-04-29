@@ -15,6 +15,18 @@ The plugin focuses on task-based segmentation workflows:
 - Live Points with positive and negative prompts
 - downstream mask cleanup, merge, and export operations
 
+## What's New in 4.2.0
+
+Version 4.2.0 adds experimental CPU-only support for SAM3.0 2D image workflows when using a CPU-safe `sam3` backend such as `sam3-cpu`.
+
+- CPU-only setup is documented in [docs/cpu_only.md](docs/cpu_only.md).
+- Device mode is now environment-driven and shown as an indicator; normal users no longer need to choose CPU or GPU manually.
+- Advanced manual device override is available only for backend testing with `NAPARI_SAM3_ENABLE_DEVICE_OVERRIDE=1`.
+- SAM3.0 2D CPU workflows are enabled for points, boxes, text, exemplar, and Live Points when the installed `sam3` backend supports CPU model construction.
+- SAM3.1, 3D/video propagation, and SAM3 video-predictor workflows remain CUDA/GPU-only in this plugin.
+- Model-folder setup now passes the detected BPE tokenizer path to SAM3 and can create `bpe_simple_vocab_16e6.txt.gz` automatically from `merges.txt`.
+- The plugin reports a clear upstream CPU-support limitation if a non-CPU-safe SAM3 backend still allocates CUDA tensors during CPU image model construction.
+
 ## What's New in 4.1.0
 
 Version 4.1.0 adds a faster `Run and Save` handoff for acquiring masks and continuing segmentation work:
@@ -54,7 +66,7 @@ Version 4.0.0 was a workflow release focused on the new Simple mode and a cleane
 - Simple mode keeps common tasks short: choose the image/task, add or enter the prompt, then run preview.
 - Simple mode includes `Mask Ops` in the Run area to open the standalone mask cleanup widget for preview labels.
 - Simple mode uses SAM3.0 for 2D image tasks so Advanced SAM3.1 video-model settings do not break Simple image segmentation.
-- Device selection is explicit: choose `GPU` or `CPU`; there is no automatic device mode in the Simple workflow.
+- Device selection is explicit. `GPU / CUDA` is recommended for full SAM3 functionality; `CPU` is experimental for SAM3.0 2D image workflows and requires a CPU-safe SAM3 backend.
 - Live Points are still available with `T` for next point mode and `Shift+T` to flip selected or latest points.
 
 SAM 3 is not bundled with this plugin. Install the SAM 3 backend and download the SAM 3 model files separately from Meta's Hugging Face repository.
@@ -72,13 +84,13 @@ Release notes and bug-fix history are maintained in [CHANGELOG.md](CHANGELOG.md)
 - Python `>=3.11`
 - napari `>=0.5`
 - SAM 3 Python package importable as `sam3`
-- PyTorch and torchvision installed for your platform
+- CUDA-enabled PyTorch and torchvision installed for your platform for normal use
 - A local SAM 3 checkpoint directory containing:
   - `config.json`
   - `processor_config.json`
   - one weight file such as `sam3.pt`, `model.safetensors`, or `sam3.1_multiplex.pt`
 
-If CUDA is not available or not compatible, select **CPU** in the widget.
+CPU-only use is possible for SAM3.0 2D image workflows with a CPU-safe SAM3 backend. See [CPU-only SAM3.0 setup](docs/cpu_only.md).
 
 ## Setup
 
@@ -102,15 +114,8 @@ python -m pip install --upgrade pip wheel
 python -m pip install "setuptools<82"
 python -m pip install "napari[all]"
 ```
-5. Install PyTorch
+5. Install CUDA-enabled PyTorch
 
-### Choose one:
-
-### CPU
-```Bash
-python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-```
-### GPU
 ```Bash
 python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 ```
@@ -135,6 +140,7 @@ python -m pip install einops triton-windows pycocotools
 If `SAM3.1` multiplex propagation later fails on Windows with errors such as
 `No available kernel. Aborting execution!`, see the replacement-file workaround in
 [`windows_sam31_workaround/README.md`](windows_sam31_workaround/README.md).
+
 8. Install napari-sam3-assistant
 ```Bash
 python -m pip install napari-sam3-assistant
@@ -170,15 +176,8 @@ python -m pip install "setuptools<82" "numpy>=1.26,<2"
 python -m pip install "napari[bermuda, pyqt6, optional-numba, optional-base]"
 ```
 
-4. Install PyTorch
+4. Install CUDA-enabled PyTorch
 
-Choose one:
-
-### CPU
-```Bash
-python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-```
-### GPU
 ```Bash
 python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
 ```
@@ -275,8 +274,9 @@ Current model support:
 
 ## Device rule
 
-- If you installed CPU-only PyTorch, choose **CPU**
-- If you installed CUDA PyTorch and `torch.cuda.is_available()` is `True`, you may choose **CUDA**
+- Use a CUDA-enabled PyTorch environment for normal use.
+- Select **GPU / CUDA** for SAM3.0, SAM3.1, and 3D/video workflows.
+- **CPU** is experimental for SAM3.0 2D image workflows with a CPU-safe SAM3 backend. Tested CPU workflows include points, boxes, exemplar, text, and Live Points. See [CPU-only SAM3.0 setup](docs/cpu_only.md).
 
 ## For developers
 
@@ -306,7 +306,7 @@ The main flow is:
 
 Simple mode is intended for common imaging tasks:
 
-- `2D`: points, boxes, labels-mask, or text prompts on the selected image plane
+- `2D`: points, boxes, labels-mask, or text prompts on the selected image plane. CPU mode requires a CPU-safe SAM3 backend.
 - `Text`: enter a short imaging concept such as `cell`, `nucleus`, or `myelin`
 - `Refine`: use Live Points to add positive or negative point corrections
 - `Exemplar`: draw one or more boxes around example objects
@@ -315,7 +315,7 @@ Simple mode is intended for common imaging tasks:
 Simple mode keeps model setup small:
 
 - model folder
-- `GPU` or `CPU`
+- `GPU / CUDA` or experimental `CPU`
 - SAM3.0 for Simple image tasks
 
 Use `Advanced` when you need SAM3.1 model selection, batch processing, large-image ROI controls, detailed result tables, or CSV export.
@@ -600,7 +600,7 @@ Saved output is written to:
 SAM3 saved propagated labels
 ```
 
-The current SAM 3 video predictor backend is CUDA-only. CPU mode is supported for 2D/image workflows, not 3D/video propagation.
+The current SAM 3 video predictor backend is CUDA-only. CPU mode is experimental for SAM3.0 2D image workflows with a CPU-safe SAM3 backend; see [CPU-only SAM3.0 setup](docs/cpu_only.md).
 
 ## Channel Axis
 
@@ -735,8 +735,8 @@ For ARM64 systems such as NVIDIA DGX Spark / GB10:
 - Use Python 3.11 or newer.
 - Keep the NVIDIA driver and CUDA stack current.
 - Install a PyTorch/torchvision build that supports your GPU architecture.
-- Use `CPU` mode for reliable 2D execution if CUDA kernels are unavailable.
-- Use explicit `CUDA` only when testing a compatible GPU build.
+- Use a PyTorch/torchvision/SAM3 build with CUDA kernels compatible with the device.
+- CPU-only PyTorch requires a CPU-safe SAM3 backend for image workflows; see [CPU-only SAM3.0 setup](docs/cpu_only.md).
 
 Check PyTorch GPU support:
 
@@ -772,7 +772,7 @@ SAM 3 returned no detections above threshold. Try:
 - a more common concept phrase
 - a lower `Detection threshold`
 - box or exemplar prompts
-- CPU mode if the CUDA path is unstable
+- a CUDA/PyTorch/SAM3 build compatible with your GPU
 
 ### CUDA kernel image error
 
@@ -782,7 +782,7 @@ Error:
 CUDA error: no kernel image is available for execution on the device
 ```
 
-The GPU is visible, but at least one required CUDA kernel was not built for the device architecture. Use `CPU`, or install compatible PyTorch/torchvision/SAM 3 builds.
+The GPU is visible, but at least one required CUDA kernel was not built for the device architecture. Install compatible PyTorch/torchvision/SAM 3 builds for the GPU. For CPU-only 2D use, see [CPU-only SAM3.0 setup](docs/cpu_only.md).
 
 ### Invalid GPU architecture
 
@@ -792,7 +792,7 @@ Error:
 nvrtc: error: invalid value for --gpu-architecture
 ```
 
-The installed PyTorch CUDA runtime cannot compile for the detected GPU. Use `CPU` or install a build that supports the GPU.
+The installed PyTorch CUDA runtime cannot compile for the detected GPU. Install a PyTorch/torchvision/SAM 3 build that supports the GPU. For CPU-only 2D use, see [CPU-only SAM3.0 setup](docs/cpu_only.md).
 
 ### BFloat16 conversion errors
 

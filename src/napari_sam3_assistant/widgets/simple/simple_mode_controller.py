@@ -6,8 +6,10 @@ from qtpy.QtCore import QObject, Signal
 from qtpy.QtWidgets import QFileDialog
 
 from napari.layers import Image
+import torch
 
 from ...core.models import Sam3Task
+from ...device_utils import runtime_device
 from ..advanced.advanced_mode_panel import (
     PROMPT_BOX,
     PROMPT_LABELS,
@@ -208,15 +210,11 @@ class SimpleModeController(QObject):
         return self.shared_context.settings.value(SIMPLE_MODEL_DIR_KEY, "", type=str)
 
     def current_device(self) -> str:
-        if self.shared_context.settings is None:
-            return "cuda"
-        device = self.shared_context.settings.value(SIMPLE_DEVICE_KEY, "cuda", type=str)
-        return device if device in {"cuda", "cpu"} else "cuda"
+        return runtime_device(torch.cuda.is_available())
 
     def set_device(self, device: str) -> None:
-        normalized = device if device in {"cuda", "cpu"} else "cuda"
         if self.shared_context.settings is not None:
-            self.shared_context.settings.setValue(SIMPLE_DEVICE_KEY, normalized)
+            self.shared_context.settings.setValue(SIMPLE_DEVICE_KEY, self.current_device())
         self.state_changed.emit()
 
     def run_current_task(self) -> None:

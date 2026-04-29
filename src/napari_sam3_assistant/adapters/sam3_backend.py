@@ -22,6 +22,11 @@ from ..core.coordinates import (
     selection_image_hw,
     to_rgb_uint8,
 )
+from ..device_utils import (
+    CUDA_CPU_ONLY_MESSAGE,
+    UPSTREAM_CPU_CUDA_MESSAGE,
+    is_cuda_not_compiled_error,
+)
 from ..core.models import PromptBundle, PromptPolarity, Sam3Result, Sam3Session, Sam3Task
 
 
@@ -75,7 +80,12 @@ class Sam3Adapter:
             "compile": self.config.compile_model,
             "device": device,
         }
-        self.image_model = build_sam3_image_model(**kwargs)
+        try:
+            self.image_model = build_sam3_image_model(**kwargs)
+        except (RuntimeError, AssertionError) as error:
+            if device == "cpu" and is_cuda_not_compiled_error(error):
+                raise RuntimeError(UPSTREAM_CPU_CUDA_MESSAGE) from error
+            raise
         self._cached_image_state = None
         self._cached_image_key = None
         if device == "cpu":
@@ -775,6 +785,8 @@ class Sam3Adapter:
         requested = self.config.device
         issue = cuda_compatibility_issue()
         if requested:
+            if str(requested).startswith("cuda") and not torch.cuda.is_available():
+                raise RuntimeError(CUDA_CPU_ONLY_MESSAGE)
             return requested
         if torch.cuda.is_available() and issue is None:
             return "cuda"
