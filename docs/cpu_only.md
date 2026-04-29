@@ -37,6 +37,12 @@ python -m pip install "setuptools<82"
 python -m pip install "napari[all]"
 
 python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# Required by sam3-cpu import path on Windows
+python -m pip install decord
+
+```
+```bash
 python -m pip install --no-cache-dir git+https://github.com/rhubarb-ai/sam3-cpu
 python -m pip install napari-sam3-assistant
 ```
@@ -56,17 +62,7 @@ unclear which backend napari is using.
 Run this inside the activated CPU environment:
 
 ```bash
-python - <<'PY'
-import torch
-import sam3
-import sam3.model_builder
-
-print("torch:", torch.__version__)
-print("torch.version.cuda:", torch.version.cuda)
-print("torch.cuda.is_available():", torch.cuda.is_available())
-print("sam3 package:", sam3.__file__)
-print("model_builder:", sam3.model_builder.__file__)
-PY
+python -c "import torch; import sam3; import sam3.model_builder; print('torch:', torch.__version__); print('torch.version.cuda:', torch.version.cuda); print('torch.cuda.is_available():', torch.cuda.is_available()); print('sam3 package:', sam3.__file__); print('model_builder:', sam3.model_builder.__file__)"
 ```
 
 Expected CPU-only PyTorch output:
@@ -122,18 +118,53 @@ the backend verification command above.
 
 ## ARM64 / DGX Spark note
 
-On some ARM64 systems, `decord` may not be available. If importing `sam3-cpu`
-fails because `decord` is hard-imported, patch the local `sam3-cpu` checkout so
-the import is optional in:
+On some Linux ARM64/aarch64 systems, including DGX Spark, `decord` may not provide a compatible prebuilt wheel. This can prevent `sam3-cpu` from importing, even when you only want to run image-only CPU workflows.
+
+The typical error is:
+
+```text
+ModuleNotFoundError: No module named 'decord'
+```
+or an installation error showing that no matching decord wheel is available for Linux ARM64/aarch64.
+
+This happens because sam3-cpu may hard-import decord in:
 
 ```text
 sam3/train/data/sam3_image_dataset.py
 ```
+For image-only CPU use, decord should not be required unless video decoding is actually used.
 
-The hard import:
+## Temporary workaround
 
-```python
-from decord import cpu, VideoReader
+Patch the local sam3-cpu checkout to make the decord import optional:
+
+
+```bash
+cd ~/Projects/napari/sam3-cpu
+
+python - <<'PY'
+from pathlib import Path
+
+p = Path("sam3/train/data/sam3_image_dataset.py")
+text = p.read_text()
+
+old = "from decord import cpu, VideoReader"
+new = """try:
+    from decord import cpu, VideoReader
+except ModuleNotFoundError:
+    cpu = None
+    VideoReader = None
+"""
+
+if old not in text:
+    print("Target import line not found. File may already be patched.")
+else:
+    p.write_text(text.replace(old, new))
+    print("Patched optional decord import in", p)
+PY
 ```
 
-should be guarded so image-only CPU workflows can import without `decord`.
+Then verify that sam3-cpu imports correctly:
+```bash
+python -c "import sam3; print('sam3 import ok')"
+```
