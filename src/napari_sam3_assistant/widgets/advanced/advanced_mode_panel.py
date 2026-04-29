@@ -10,6 +10,7 @@ from napari import current_viewer
 from napari.layers import Image, Labels, Points, Shapes
 from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
+import torch
 from qtpy.QtGui import QDesktopServices, QKeySequence
 from qtpy.QtCore import QSettings, Qt, QUrl
 from qtpy.QtWidgets import (
@@ -49,6 +50,17 @@ from ...core.coordinates import (
     localize_bundle_to_roi,
     roi_anchor_from_bundle,
     selection_video_output_shape,
+)
+from ...device_utils import (
+    CPU_3D_MESSAGE,
+    CPU_EXPERIMENTAL_2D_MESSAGE,
+    CPU_SAM31_MESSAGE,
+    CUDA_CPU_ONLY_MESSAGE,
+    cpu_prompt_support_error,
+    device_indicator_tooltip,
+    manual_device_override_enabled,
+    normalize_requested_device,
+    runtime_device,
 )
 from ...core.models import PromptBundle, Sam3Result, Sam3Session, Sam3Task
 from ...providers.sam3_repo_provider import Sam3RepoProvider
@@ -641,8 +653,15 @@ class AdvancedModePanel(QWidget):
         self.lazy_load_check.setChecked(True)
 
         self.device_combo = QComboBox()
-        self.device_combo.addItem("CUDA", "cuda")
-        self.device_combo.addItem("CPU", "cpu")
+        self.device_combo.addItem("GPU / CUDA", "cuda")
+        self.device_combo.addItem("CPU (2D only)", "cpu")
+        self.device_combo.setEnabled(manual_device_override_enabled())
+        self.device_combo.setToolTip(
+            device_indicator_tooltip(
+                runtime_device(torch.cuda.is_available()),
+                override_enabled=manual_device_override_enabled(),
+            )
+        )
         self.model_type_combo.currentIndexChanged.connect(self._on_model_type_changed)
         self.device_combo.currentIndexChanged.connect(self._on_device_changed)
 
@@ -1246,6 +1265,11 @@ class AdvancedModePanel(QWidget):
             self._log("No prompts found. Add text, points, boxes, labels, or exemplar ROIs.")
             self.activity_status.set_ready()
             return
+        cpu_error = self._cpu_bundle_support_error(bundle)
+        if cpu_error:
+            self._log(cpu_error)
+            self.activity_status.set_ready()
+            return
 
         self._clear_results_table()
         if bundle.task == Sam3Task.SEGMENT_3D:
@@ -1278,6 +1302,12 @@ class AdvancedModePanel(QWidget):
             return
         if not any(bundle.has_prompt() for bundle in bundles):
             self._log("No prompts found. Add text, points, boxes, labels, or exemplar ROIs.")
+            self.activity_status.set_ready()
+            return
+        cpu_errors = [self._cpu_bundle_support_error(bundle) for bundle in bundles]
+        cpu_error = next((error for error in cpu_errors if error), None)
+        if cpu_error:
+            self._log(cpu_error)
             self.activity_status.set_ready()
             return
         self._clear_results_table()
@@ -1892,22 +1922,58 @@ class AdvancedModePanel(QWidget):
             raise RuntimeError(
                 f"Select a {self.model_type_combo.currentText()} directory containing: {expected}."
             )
-        device = self.device_combo.currentData()
+        device = self._current_runtime_device()
+        self._log(
+            "Selected device: "
+            f"{device}; torch.cuda.is_available()={torch.cuda.is_available()}; "
+            f"torch.version.cuda={torch.version.cuda}"
+        )
+        if device == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError(CUDA_CPU_ONLY_MESSAGE)
+        if device == "cpu" and self._current_task() == Sam3Task.SEGMENT_3D:
+            raise RuntimeError(CPU_3D_MESSAGE)
+        if device == "cpu" and model_type == "sam3.1":
+            raise RuntimeError(CPU_SAM31_MESSAGE)
+        bpe_path = self._bpe_path_from_model_dir(model_dir)
+        if device == "cpu":
+            self._log(CPU_EXPERIMENTAL_2D_MESSAGE)
+            self._log(
+                "CPU SAM3.0 image config: "
+                f"model_type={model_type}; device={device}; "
+                f"checkpoint={checkpoint}; bpe_path={bpe_path}"
+            )
         cuda_issue = cuda_compatibility_issue()
         if device == "cuda" and cuda_issue:
             self._log(
                 "CUDA selected despite PyTorch architecture warning. "
                 f"Continuing on GPU for testing: {cuda_issue}"
             )
-        if device is None and cuda_issue:
-            device = "cpu"
-            self._log(f"Auto device selected CPU because CUDA is unavailable for this PyTorch build: {cuda_issue}")
         return Sam3AdapterConfig(
             checkpoint_path=checkpoint,
+            bpe_path=bpe_path,
             device=device,
             confidence_threshold=float(self.confidence_threshold_spin.value()),
             load_from_hf=False,
         )
+
+    def _cpu_bundle_support_error(self, bundle: PromptBundle) -> str | None:
+        if self._current_runtime_device() != "cpu":
+            return None
+        return cpu_prompt_support_error(
+            bundle.task.value,
+            has_text=bool(bundle.text and bundle.text.text.strip()),
+            has_points=bool(bundle.points),
+            has_boxes=bool(bundle.boxes),
+            has_masks=bool(bundle.masks),
+            has_exemplars=bool(bundle.exemplars),
+        )
+
+    def _current_runtime_device(self) -> str:
+        if manual_device_override_enabled():
+            device = self.device_combo.currentData()
+            if device in {"cuda", "cpu"}:
+                return device
+        return runtime_device(torch.cuda.is_available())
 
     def _checkpoint_path_from_model_dir(
         self,
@@ -1919,6 +1985,35 @@ class AdvancedModePanel(QWidget):
             candidate = path / name
             if candidate.exists():
                 return candidate
+        return None
+
+
+    def _bpe_path_from_model_dir(self, model_dir: str) -> Path | None:
+        path = Path(model_dir)
+
+        candidates = (
+            path / "bpe_simple_vocab_16e6.txt.gz",
+            path / "merges.txt.gz",
+        )
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+
+        merges = path / "merges.txt"
+        if merges.exists():
+            gz_path = path / "bpe_simple_vocab_16e6.txt.gz"
+            try:
+                import gzip
+
+                with open(merges, "rb") as src, gzip.open(gz_path, "wb") as dst:
+                    dst.write(src.read())
+
+                self._log(f"Created SAM3 BPE tokenizer file: {gz_path}")
+                return gz_path
+            except Exception as exc:
+                self._log(f"Could not create SAM3 BPE tokenizer from merges.txt: {exc}")
+                return None
+
         return None
 
     def _expected_weight_names(self, model_type: str | None = None) -> tuple[str, ...]:
@@ -1935,9 +2030,18 @@ class AdvancedModePanel(QWidget):
         model_dir = self.settings.value("model_dir", "", type=str)
         self.model_dir_edit.setText(model_dir or "")
         model_type = self.settings.value("model_type", "sam3", type=str)
-        device = self.settings.value("device", "cuda", type=str)
-        if device not in {"cuda", "cpu"}:
-            device = "cuda"
+        if manual_device_override_enabled():
+            default_device = runtime_device(torch.cuda.is_available())
+            requested_device = self.settings.value("device", default_device, type=str)
+            device, warning = normalize_requested_device(
+                requested_device,
+                torch.cuda.is_available(),
+            )
+            if warning:
+                self._log(warning)
+                self.settings.setValue("device", device)
+        else:
+            device = runtime_device(torch.cuda.is_available())
         threshold = self.settings.value("confidence_threshold", 0.35, type=float)
 
         old_model_signals = self.model_type_combo.blockSignals(True)
@@ -1950,6 +2054,13 @@ class AdvancedModePanel(QWidget):
             index = self.device_combo.findData(device)
             if index >= 0:
                 self.device_combo.setCurrentIndex(index)
+            self.device_combo.setEnabled(manual_device_override_enabled())
+            self.device_combo.setToolTip(
+                device_indicator_tooltip(
+                    device,
+                    override_enabled=manual_device_override_enabled(),
+                )
+            )
             self.confidence_threshold_spin.setValue(float(threshold))
         finally:
             self.model_type_combo.blockSignals(old_model_signals)
@@ -2002,6 +2113,8 @@ class AdvancedModePanel(QWidget):
             self._log("Model type changed; unloaded SAM3 model so it reloads from the selected folder.")
 
     def _on_device_changed(self) -> None:
+        if not manual_device_override_enabled():
+            return
         self._save_settings()
         if self.adapter is not None:
             self._unload_adapter()

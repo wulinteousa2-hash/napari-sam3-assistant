@@ -5,6 +5,7 @@ from typing import Any
 
 from napari import current_viewer
 from napari.viewer import Viewer
+import torch
 from qtpy.QtCore import QSettings, QSize
 from qtpy.QtWidgets import (
     QComboBox,
@@ -19,6 +20,11 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from ..device_utils import (
+    device_indicator_tooltip,
+    manual_device_override_enabled,
+    runtime_device,
+)
 from ..providers.sam3_repo_provider import Sam3RepoProvider
 from ..services.checkpoint_service import CheckpointService
 from ..services.layer_writer import LayerWriter
@@ -35,7 +41,7 @@ from .mode_switch_bar import ModeSwitchBar
 from .shared.shared_context import SharedContext
 from .shared.task_router import TaskRouter
 from .simple.simple_mode_panel import SimpleModePanel
-from .simple.simple_mode_controller import SIMPLE_DEVICE_KEY, SIMPLE_MODEL_DIR_KEY
+from .simple.simple_mode_controller import SIMPLE_MODEL_DIR_KEY
 
 
 MODE_SETTINGS_KEY = "workspace_mode"
@@ -84,8 +90,15 @@ class MainWidget(QWidget):
         self.model_folder_btn = QPushButton("Model Folder")
         self.model_folder_btn.clicked.connect(self._browse_current_model_dir)
         self.device_combo = QComboBox()
-        self.device_combo.addItem("GPU", "cuda")
-        self.device_combo.addItem("CPU", "cpu")
+        self.device_combo.addItem("GPU / CUDA", "cuda")
+        self.device_combo.addItem("CPU (2D only)", "cpu")
+        self.device_combo.setEnabled(manual_device_override_enabled())
+        self.device_combo.setToolTip(
+            device_indicator_tooltip(
+                runtime_device(torch.cuda.is_available()),
+                override_enabled=manual_device_override_enabled(),
+            )
+        )
         self.device_combo.currentIndexChanged.connect(self._on_top_device_changed)
 
         self.stack = ModeStackedWidget(self)
@@ -204,6 +217,13 @@ class MainWidget(QWidget):
             index = self.device_combo.findData(device)
             if index >= 0:
                 self.device_combo.setCurrentIndex(index)
+            self.device_combo.setEnabled(manual_device_override_enabled())
+            self.device_combo.setToolTip(
+                device_indicator_tooltip(
+                    device,
+                    override_enabled=manual_device_override_enabled(),
+                )
+            )
         finally:
             self.device_combo.blockSignals(False)
 
@@ -255,9 +275,9 @@ class MainWidget(QWidget):
     def _current_top_device(self, mode: str) -> str:
         if mode == "advanced":
             value = self.advanced_panel.device_combo.currentData()
-            return value if value in {"cuda", "cpu"} else "cuda"
-        value = self.settings.value(SIMPLE_DEVICE_KEY, "cuda", type=str)
-        return value if value in {"cuda", "cpu"} else "cuda"
+            if manual_device_override_enabled() and value in {"cuda", "cpu"}:
+                return value
+        return runtime_device(torch.cuda.is_available())
 
     def _current_model_status(self, mode: str) -> tuple[str, str]:
         if mode == "advanced":
@@ -283,6 +303,9 @@ class MainWidget(QWidget):
         self._sync_top_controls()
 
     def _on_top_device_changed(self) -> None:
+        if not manual_device_override_enabled():
+            self._sync_top_controls()
+            return
         device = self.device_combo.currentData() or "cuda"
         if self.shared_context.get_mode() == "advanced":
             combo = self.advanced_panel.device_combo

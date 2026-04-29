@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: "If you use napari-sam3-assistant in your work, please cite it using this metadata."
 type: software
 title: "napari-sam3-assistant"
-version: "4.1.0"
-date-released: "2026-04-28"
+version: "4.2.0"
+date-released: "2026-04-29"
 authors:
   - family-names: "Teo"
     given-names: "Wulin"

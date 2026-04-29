@@ -9,6 +9,16 @@ import torch
 from PIL import Image
 
 import napari_sam3_assistant.adapters.sam3_backend as backend
+from napari_sam3_assistant.device_utils import (
+    CPU_3D_MESSAGE,
+    DEVICE_OVERRIDE_ENV,
+    SAVED_CUDA_OVERRIDDEN_MESSAGE,
+    UPSTREAM_CPU_CUDA_MESSAGE,
+    cpu_prompt_support_error,
+    manual_device_override_enabled,
+    normalize_requested_device,
+    runtime_device,
+)
 from napari_sam3_assistant.adapters import Sam3Adapter, Sam3AdapterConfig
 from napari_sam3_assistant.core.coordinates import infer_image_selection
 from napari_sam3_assistant.core.models import (
@@ -91,10 +101,80 @@ def test_text_prompt_threshold_retry_restores_configured_threshold():
 
 def test_explicit_cuda_is_allowed_even_when_arch_warning_exists(monkeypatch):
     monkeypatch.setattr(backend, "cuda_compatibility_issue", lambda: "unsupported arch")
+    monkeypatch.setattr(backend.torch.cuda, "is_available", lambda: True)
 
     adapter = Sam3Adapter(Sam3AdapterConfig(device="cuda"))
 
     assert adapter._resolved_device() == "cuda"
+
+
+def test_explicit_cuda_rejected_for_cpu_only_torch(monkeypatch):
+    monkeypatch.setattr(backend.torch.cuda, "is_available", lambda: False)
+
+    adapter = Sam3Adapter(Sam3AdapterConfig(device="cuda"))
+
+    try:
+        adapter._resolved_device()
+    except RuntimeError as error:
+        assert "PyTorch installation is CPU-only" in str(error)
+    else:
+        raise AssertionError("Expected explicit CUDA to fail in CPU-only PyTorch")
+
+
+def test_normalize_requested_device_uses_hardware_default_and_warns_on_saved_cuda():
+    assert normalize_requested_device(None, cuda_available=False) == ("cpu", None)
+    assert normalize_requested_device(None, cuda_available=True) == ("cuda", None)
+    assert normalize_requested_device("cpu", cuda_available=True) == ("cpu", None)
+    assert normalize_requested_device("cuda", cuda_available=False) == (
+        "cpu",
+        SAVED_CUDA_OVERRIDDEN_MESSAGE,
+    )
+
+
+def test_runtime_device_follows_environment_cuda_availability():
+    assert runtime_device(cuda_available=False) == "cpu"
+    assert runtime_device(cuda_available=True) == "cuda"
+
+
+def test_manual_device_override_requires_explicit_env(monkeypatch):
+    monkeypatch.delenv(DEVICE_OVERRIDE_ENV, raising=False)
+    assert manual_device_override_enabled() is False
+    monkeypatch.setenv(DEVICE_OVERRIDE_ENV, "1")
+    assert manual_device_override_enabled() is True
+    monkeypatch.setenv(DEVICE_OVERRIDE_ENV, "false")
+    assert manual_device_override_enabled() is False
+
+
+def test_cpu_prompt_support_allows_sam30_2d_image_workflows():
+    assert cpu_prompt_support_error(
+        "2d_segmentation",
+        has_points=True,
+    ) is None
+    assert cpu_prompt_support_error(
+        "2d_segmentation",
+        has_boxes=True,
+    ) is None
+    assert cpu_prompt_support_error(
+        "2d_segmentation",
+        has_text=True,
+    ) is None
+    assert cpu_prompt_support_error(
+        "2d_segmentation",
+        has_masks=True,
+    ) is None
+    assert cpu_prompt_support_error(
+        "text_segmentation",
+        has_text=True,
+    ) is None
+    assert cpu_prompt_support_error(
+        "exemplar_segmentation",
+        has_boxes=True,
+        has_exemplars=True,
+    ) is None
+    assert cpu_prompt_support_error(
+        "3d_video_propagation",
+        has_points=True,
+    ) == CPU_3D_MESSAGE
 
 
 def test_auto_uses_cpu_when_cuda_arch_warning_exists(monkeypatch):
@@ -137,6 +217,7 @@ def test_load_video_does_not_pass_unsupported_device_keyword(monkeypatch):
     module = types.ModuleType("sam3.model_builder")
     module.build_sam3_video_predictor = fake_build_sam3_video_predictor
     monkeypatch.setitem(sys.modules, "sam3.model_builder", module)
+    monkeypatch.setattr(backend.torch.cuda, "is_available", lambda: True)
 
     adapter = Sam3Adapter(Sam3AdapterConfig(device="cuda:2", compile_model=True))
     adapter.load_video()
@@ -167,6 +248,7 @@ def test_sam31_checkpoint_routes_to_multiplex_video_predictor(monkeypatch):
     module = types.ModuleType("sam3.model_builder")
     module.build_sam3_multiplex_video_predictor = fake_build_sam3_multiplex_video_predictor
     monkeypatch.setitem(sys.modules, "sam3.model_builder", module)
+    monkeypatch.setattr(backend.torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(backend.torch.cuda, "set_device", lambda device: None)
 
     adapter = Sam3Adapter(
@@ -324,6 +406,56 @@ def test_sam31_checkpoint_rejects_current_2d_image_loader():
         assert "SAM3.1 multiplex checkpoints are supported for 3D/video" in str(error)
     else:
         raise AssertionError("Expected SAM3.1 image loading to fail clearly")
+
+
+def test_cpu_image_load_wraps_upstream_cuda_allocation_error(monkeypatch):
+    class Processor:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    def fake_build_sam3_image_model(**kwargs):
+        raise RuntimeError("Torch not compiled with CUDA enabled")
+
+    processor_module = types.ModuleType("sam3.model.sam3_image_processor")
+    processor_module.Sam3Processor = Processor
+    builder_module = types.ModuleType("sam3.model_builder")
+    builder_module.build_sam3_image_model = fake_build_sam3_image_model
+    monkeypatch.setitem(sys.modules, "sam3.model.sam3_image_processor", processor_module)
+    monkeypatch.setitem(sys.modules, "sam3.model_builder", builder_module)
+
+    adapter = Sam3Adapter(Sam3AdapterConfig(device="cpu"))
+
+    try:
+        adapter.load_image()
+    except RuntimeError as error:
+        assert str(error) == UPSTREAM_CPU_CUDA_MESSAGE
+    else:
+        raise AssertionError("Expected upstream CPU CUDA allocation error to be wrapped")
+
+
+def test_cpu_image_load_wraps_upstream_cuda_assertion_error(monkeypatch):
+    class Processor:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    def fake_build_sam3_image_model(**kwargs):
+        raise AssertionError("Torch not compiled with CUDA enabled")
+
+    processor_module = types.ModuleType("sam3.model.sam3_image_processor")
+    processor_module.Sam3Processor = Processor
+    builder_module = types.ModuleType("sam3.model_builder")
+    builder_module.build_sam3_image_model = fake_build_sam3_image_model
+    monkeypatch.setitem(sys.modules, "sam3.model.sam3_image_processor", processor_module)
+    monkeypatch.setitem(sys.modules, "sam3.model_builder", builder_module)
+
+    adapter = Sam3Adapter(Sam3AdapterConfig(device="cpu"))
+
+    try:
+        adapter.load_image()
+    except RuntimeError as error:
+        assert str(error) == UPSTREAM_CPU_CUDA_MESSAGE
+    else:
+        raise AssertionError("Expected upstream CPU CUDA assertion to be wrapped")
 
 
 def test_2d_box_prompts_use_instance_predictor_and_clip_masks(monkeypatch):

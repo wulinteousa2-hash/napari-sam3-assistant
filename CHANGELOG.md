@@ -2,6 +2,36 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.2.0
+
+### Added
+
+- Added experimental CPU-only support for SAM3.0 2D image workflows when the environment provides a CPU-safe importable `sam3` backend such as `rhubarb-ai/sam3-cpu`.
+- Added [docs/cpu_only.md](docs/cpu_only.md) with a CPU-only setup path, backend verification commands, supported workflow list, BPE tokenizer notes, and ARM64/DGX Spark `decord` guidance.
+- Added BPE tokenizer detection for selected model folders. The plugin now prefers `bpe_simple_vocab_16e6.txt.gz`, accepts `merges.txt.gz`, and creates `bpe_simple_vocab_16e6.txt.gz` automatically from `merges.txt` when possible.
+- Added CPU-mode logging that records model type, selected runtime device, checkpoint path, BPE tokenizer path, and the experimental CPU support warning.
+- Added a backend defensive error wrapper for CPU image model construction when a non-CPU-safe SAM3 backend still raises `Torch not compiled with CUDA enabled`.
+- Added focused tests for device normalization, CPU-only CUDA rejection, CPU prompt support validation, CPU model-construction error wrapping, and the manual device override flag.
+
+### Changed
+
+- Device selection is now environment-driven for normal use. CUDA-capable PyTorch selects `GPU / CUDA`; CPU-only PyTorch selects `CPU`.
+- The visible device control is now an indicator by default instead of a user preference selector.
+- Manual device switching is limited to backend testing and requires `NAPARI_SAM3_ENABLE_DEVICE_OVERRIDE=1`.
+- CPU mode now allows SAM3.0 2D image workflows in the plugin instead of blocking untested 2D task labels. Points, boxes, exemplar, text, and Live Points are documented as the tested CPU workflows with a CPU-safe backend.
+- README guidance now keeps the main GPU/CUDA setup concise and links CPU-only users to the dedicated CPU-only setup guide.
+
+### Fixed
+
+- Fixed CPU-only environments accidentally inheriting a saved `cuda` setting and failing with raw `Torch not compiled with CUDA enabled` errors.
+- Fixed Advanced mode startup after the CPU/GPU validation changes by importing `torch` where device availability is checked.
+- Fixed Simple mode so runtime device selection follows the active environment instead of silently converting CPU back to CUDA from saved settings.
+
+### Notes
+
+- CPU mode is for SAM3.0 2D image workflows only. SAM3.1, 3D/video propagation, multiplex workflows, and workflows requiring the SAM3 video predictor remain CUDA/GPU-only in this plugin.
+- The standard Meta `facebookresearch/sam3` backend may still allocate CUDA tensors during image model construction. CPU-only users need a CPU-safe backend installed as the importable `sam3` package.
+
 ## 4.1.0
 
 ### Added
