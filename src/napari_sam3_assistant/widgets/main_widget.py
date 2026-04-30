@@ -8,6 +8,7 @@ from napari.viewer import Viewer
 import torch
 from qtpy.QtCore import QSettings, QSize
 from qtpy.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDockWidget,
     QFrame,
@@ -25,6 +26,7 @@ from ..device_utils import (
     manual_device_override_enabled,
     runtime_device,
 )
+from ..notifications import TaskCompleteSound
 from ..providers.sam3_repo_provider import Sam3RepoProvider
 from ..services.checkpoint_service import CheckpointService
 from ..services.layer_writer import LayerWriter
@@ -100,6 +102,8 @@ class MainWidget(QWidget):
             )
         )
         self.device_combo.currentIndexChanged.connect(self._on_top_device_changed)
+        self.sound_check = QCheckBox("Sound")
+        self.sound_check.setToolTip("Play a short completion chime when a SAM3 task finishes.")
 
         self.stack = ModeStackedWidget(self)
         self.advanced_panel = AdvancedModePanel(
@@ -131,6 +135,7 @@ class MainWidget(QWidget):
             prompt_state_service=PromptStateService(),
             prompt_collector=PromptCollector(),
             layer_writer=LayerWriter(self.viewer) if self.viewer is not None else None,
+            task_complete_sound=TaskCompleteSound(self.settings),
         )
 
     def _build_ui(self) -> None:
@@ -155,12 +160,14 @@ class MainWidget(QWidget):
         layout.addWidget(self.model_folder_btn)
         layout.addWidget(QLabel("Device"))
         layout.addWidget(self.device_combo)
+        layout.addWidget(self.sound_check)
         strip.setLayout(layout)
         return strip
 
     def _connect_signals(self) -> None:
         self.mode_switch_bar.mode_changed.connect(self._set_mode)
         self.simple_panel.controller.state_changed.connect(self._sync_top_controls)
+        self.sound_check.toggled.connect(self._on_sound_toggled)
 
     def _restore_mode(self) -> str:
         mode = self.settings.value(MODE_SETTINGS_KEY, "simple", type=str)
@@ -231,6 +238,13 @@ class MainWidget(QWidget):
         self.model_status_label.setText(text)
         self.model_status_label.setToolTip(tooltip)
         self.model_folder_btn.setToolTip(tooltip or "Select model folder")
+        sound = self.shared_context.task_complete_sound
+        if sound is not None:
+            self.sound_check.blockSignals(True)
+            try:
+                self.sound_check.setChecked(sound.is_enabled())
+            finally:
+                self.sound_check.blockSignals(False)
 
     def _sync_mode_size_constraints(self, mode: str) -> None:
         dock = self._containing_dock_widget()
@@ -335,6 +349,11 @@ class MainWidget(QWidget):
             combo.blockSignals(old)
         self.advanced_panel._on_model_type_changed()
         self._sync_top_controls()
+
+    def _on_sound_toggled(self, checked: bool) -> None:
+        sound = self.shared_context.task_complete_sound
+        if sound is not None:
+            sound.set_enabled(checked)
 
     def __getattr__(self, name: str) -> Any:
         advanced_panel = self.__dict__.get("advanced_panel")

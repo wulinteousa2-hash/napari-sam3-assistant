@@ -70,6 +70,7 @@ from ...services.prompt_collector import PromptCollector
 from ...services.prompt_state_service import PromptStateService
 from ...mask_operations import MaskOperationsPanel
 from ...mask_operations.export_service import MaskExportService
+from ...notifications import TaskCompleteSound
 from ..collapsible_panel import CollapsiblePanel
 from ..live_point_refinement import LivePointRefinementController
 from ..shared.activity_status_controller import ActivityStatusController
@@ -402,6 +403,11 @@ class AdvancedModePanel(QWidget):
             if shared_context is not None and shared_context.settings is not None
             else QSettings(SETTINGS_ORG, SETTINGS_APP)
         )
+        self.task_complete_sound = (
+            shared_context.task_complete_sound
+            if shared_context is not None and shared_context.task_complete_sound is not None
+            else TaskCompleteSound(self.settings)
+        )
         self.activity_status = (
             shared_context.activity_status
             if shared_context is not None
@@ -438,6 +444,7 @@ class AdvancedModePanel(QWidget):
         self.shared_context.prompt_state_service = self.prompt_state_service
         self.shared_context.prompt_collector = self.prompt_collector
         self.shared_context.layer_writer = self.layer_writer
+        self.shared_context.task_complete_sound = self.task_complete_sound
         self.shared_context.adapter = self.adapter
         self.shared_context.video_session = self.video_session
         self.shared_context.worker = self._worker
@@ -2429,6 +2436,7 @@ class AdvancedModePanel(QWidget):
         else:
             self.activity_status.finish_success()
             self._log("SAM3 task finished.")
+            self.task_complete_sound.play_task_complete()
         self._sync_shared_runtime_state()
 
         if self._current_task() == Sam3Task.REFINE and self.prompt_tool_combo.currentData() == PROMPT_POINTS:

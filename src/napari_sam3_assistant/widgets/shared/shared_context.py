@@ -36,6 +36,7 @@ class SharedContext:
     video_runner: Any | None = None
 
     task_router: Any | None = None
+    task_complete_sound: Any | None = None
     mode_change_callback: Any | None = None
     result_visibility: ResultVisibilityController = field(default_factory=ResultVisibilityController)
     active_rois: dict[str, Any] = field(default_factory=dict)

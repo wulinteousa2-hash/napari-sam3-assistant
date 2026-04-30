@@ -15,6 +15,14 @@ The plugin focuses on task-based segmentation workflows:
 - Live Points with positive and negative prompts
 - downstream mask cleanup, merge, and export operations
 
+
+## What's New in 4.2.1 Optional completion chime for long runs
+
+SAM3 Assistant can play a short, soft completion chime when a long-running task finishes.
+This is useful when preview or 3D/video propagation takes more than one minute and the user is working away from the screen.
+The chime is optional and can be turned on or off from the plugin UI.
+
+
 ## What's New in 4.2.0
 
 Version 4.2.0 adds experimental CPU-only support for SAM3.0 2D image workflows when using a CPU-safe `sam3` backend such as `sam3-cpu`.
@@ -27,34 +35,7 @@ Version 4.2.0 adds experimental CPU-only support for SAM3.0 2D image workflows w
 - Model-folder setup now passes the detected BPE tokenizer path to SAM3 and can create `bpe_simple_vocab_16e6.txt.gz` automatically from `merges.txt`.
 - The plugin reports a clear upstream CPU-support limitation if a non-CPU-safe SAM3 backend still allocates CUDA tensors during CPU image model construction.
 
-## What's New in 4.1.0
 
-Version 4.1.0 adds a faster `Run and Save` handoff for acquiring masks and continuing segmentation work:
-
-- `Step 4. Run` is now `Step 4. Run and Save`.
-- After a preview is created, users can choose output folder, format, and filename, then click `Save & Clean`.
-- `Save & Clean` saves the preview mask, removes temporary preview layers, releases temporary memory, unloads the model, and leaves an `Open Folder` shortcut.
-- Quick-save formats are `TIFF`, NumPy `.npy`, and `PNG` for 2D masks; 3D/video masks use `TIFF` or NumPy `.npy`.
-- Tested image coverage is documented for single-channel and RGB `2K x 2K` images, plus single-channel large-image local ROI inference around `60000 x 60000`.
-- `3D/video` propagation now uses the selected image axes more consistently when exporting frames to SAM3, drawing propagated boxes, and writing propagated labels back into napari.
-- This patch is meant to keep multichannel and RGB-like stack behavior aligned with the image the user actually selected in napari.
-- More patch-level release details are documented in [CHANGELOG.md](CHANGELOG.md).
-
-## What's New in 4.0.4
-
-Version 4.0.4 fixes a `3D/video` stack-axis bug that could mis-handle RGB-like or multichannel data during propagation:
-
-- `3D/video` propagation now uses the selected image axes more consistently when exporting frames to SAM3, drawing propagated boxes, and writing propagated labels back into napari.
-- This patch is meant to keep multichannel and RGB-like stack behavior aligned with the image the user actually selected in napari.
-- More patch-level release details are documented in [CHANGELOG.md](CHANGELOG.md).
-
-## What's New in 4.0.3
-
-Version 4.0.3 keeps the 4.0 workflow update and clarifies the difference between 2D box prompting and exemplar prompting:
-
-- `2D` box-only preview now segments inside each prompted box instead of behaving like exemplar-style visual matching.
-- `Exemplar` box prompts still use the boxed examples to find and segment similar objects outside the original boxes.
-- More patch-level release details are documented in [CHANGELOG.md](CHANGELOG.md).
 
 ## What's New in 4.0.0
 Version 4.0.0 was a workflow release focused on the new Simple mode and a cleaner Advanced mode.

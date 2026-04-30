@@ -2,6 +2,16 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.2.1
+
+### Added
+- Added an optional completion chime for long-running SAM3 tasks.
+- The chime plays when a preview or 3D/video propagation task completes after running for more than one minute.
+- Added a UI checkbox so users can turn the completion chime on or off.
+
+### Changed
+- Long-running task completion is now easier to notice when users are working away from the screen.
+
 ## 4.2.0
 
 ### Added
