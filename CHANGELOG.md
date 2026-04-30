@@ -2,6 +2,11 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.2.2
+
+### Changed
+- On Windows, the optional completion chime now uses the native `winsound` backend first for more reliable playback, while Linux and macOS keep the standard plugin sound path with a fallback beep if needed.
+
 ## 4.2.1
 
 ### Added

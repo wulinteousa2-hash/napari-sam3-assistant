@@ -24,6 +24,7 @@ class TaskCompleteSound:
         self._player: Any | None = None
         self._sound_path: Path | None = None
         self._sound_backend_available = True
+        self._windows_sound_available = True
         self._external_player = self._find_external_player()
 
     def is_enabled(self) -> bool:
@@ -46,6 +47,8 @@ class TaskCompleteSound:
             return
         try:
             sound_path = self._ensure_sound_file()
+            if self._play_with_windows_sound(sound_path):
+                return
             if self._play_with_external_player(sound_path):
                 return
             if self._should_skip_qt_multimedia():
@@ -58,6 +61,23 @@ class TaskCompleteSound:
             player.play()
         except Exception:
             self._sound_backend_available = False
+
+    def _play_with_windows_sound(self, sound_path: Path) -> bool:
+        if platform.system() != "Windows" or not self._windows_sound_available:
+            return False
+        try:
+            import winsound
+
+            winsound.PlaySound(
+                str(sound_path),
+                winsound.SND_FILENAME
+                | winsound.SND_ASYNC
+                | winsound.SND_NODEFAULT,
+            )
+            return True
+        except Exception:
+            self._windows_sound_available = False
+            return False
 
     def _find_external_player(self) -> tuple[str, ...] | None:
         if platform.system() != "Linux":

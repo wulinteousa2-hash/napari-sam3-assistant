@@ -16,11 +16,11 @@ The plugin focuses on task-based segmentation workflows:
 - downstream mask cleanup, merge, and export operations
 
 
-## What's New in 4.2.1 Optional completion chime for long runs
+## What's New in 4.2.2 Optional completion chime for long runs
 
 SAM3 Assistant can play a short, soft completion chime when a long-running task finishes.
 This is useful when preview or 3D/video propagation takes more than one minute and the user is working away from the screen.
-The chime is optional and can be turned on or off from the plugin UI.
+The chime is optional and can be turned on or off from the plugin UI. On Windows, SAM3 Assistant uses the native winsound backend first for more reliable playback, while Linux and macOS keep the standard plugin sound path with a fallback beep if needed.
 
 
 ## What's New in 4.2.0
