@@ -22,6 +22,7 @@ All notable changes to `napari-sam3-assistant` are documented here.
 ### Added
 
 - Added experimental CPU-only support for SAM3.0 2D image workflows when the environment provides a CPU-safe importable `sam3` backend such as `rhubarb-ai/sam3-cpu`.
+- Documented the tested optional CPU backend as the external `rhubarb-ai/sam3-cpu` fork, which reports version `0.1.0` and is distributed under the MIT license in its own repository; it is not bundled with this plugin.
 - Added [docs/cpu_only.md](docs/cpu_only.md) with a CPU-only setup path, backend verification commands, supported workflow list, BPE tokenizer notes, and ARM64/DGX Spark `decord` guidance.
 - Added BPE tokenizer detection for selected model folders. The plugin now prefers `bpe_simple_vocab_16e6.txt.gz`, accepts `merges.txt.gz`, and creates `bpe_simple_vocab_16e6.txt.gz` automatically from `merges.txt` when possible.
 - Added CPU-mode logging that records model type, selected runtime device, checkpoint path, BPE tokenizer path, and the experimental CPU support warning.

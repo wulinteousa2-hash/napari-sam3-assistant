@@ -4,8 +4,11 @@ CPU-only use requires a SAM3 backend that is safe on CPU. The standard Meta
 `facebookresearch/sam3` package may still allocate CUDA tensors while building the
 image model, even when the plugin passes `device="cpu"`.
 
-The tested CPU-only path uses the unofficial `rhubarb-ai/sam3-cpu` fork as the
-environment's importable `sam3` package.
+The tested CPU-only path uses the external unofficial `rhubarb-ai/sam3-cpu` fork
+as the environment's importable `sam3` package. The tested fork reports version
+`0.1.0` and is distributed under the MIT license in its own repository.
+`sam3-cpu` is not bundled with `napari-sam3-assistant`; install it separately in
+the CPU-only environment.
 
 ## Supported in this plugin
 
@@ -98,10 +101,11 @@ gzip file automatically:
 bpe_simple_vocab_16e6.txt.gz
 ```
 
-You can also create it manually:
+Most users do not need to create this file manually. If automatic creation fails
+because the model folder is read-only, run this from inside the model folder:
 
 ```bash
-gzip -c merges.txt > bpe_simple_vocab_16e6.txt.gz
+python -c "import gzip, shutil; shutil.copyfileobj(open('merges.txt','rb'), gzip.open('bpe_simple_vocab_16e6.txt.gz','wb'))"
 ```
 
 ## Use in napari

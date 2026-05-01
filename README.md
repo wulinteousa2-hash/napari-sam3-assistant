@@ -71,7 +71,7 @@ Release notes and bug-fix history are maintained in [CHANGELOG.md](CHANGELOG.md)
   - `processor_config.json`
   - one weight file such as `sam3.pt`, `model.safetensors`, or `sam3.1_multiplex.pt`
 
-CPU-only use is possible for SAM3.0 2D image workflows with a CPU-safe SAM3 backend. See [CPU-only SAM3.0 setup](docs/cpu_only.md).
+CPU-only use is possible for SAM3.0 2D image workflows with a CPU-safe SAM3 backend. The tested optional backend is the external `rhubarb-ai/sam3-cpu` fork, which reports version `0.1.0` and is distributed under the MIT license in its own repository. It is not bundled with this plugin. See [CPU-only SAM3.0 setup](docs/cpu_only.md).
 
 ## Setup
 
