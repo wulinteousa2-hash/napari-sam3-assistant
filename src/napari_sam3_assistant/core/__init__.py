@@ -12,6 +12,7 @@ from .models import (
     Sam3Task,
     TextPrompt,
 )
+from .diagnostics import Sam3Diagnostics
 
 __all__ = [
     "BoxPrompt",
@@ -25,5 +26,6 @@ __all__ = [
     "Sam3Result",
     "Sam3Session",
     "Sam3Task",
+    "Sam3Diagnostics",
     "TextPrompt",
 ]

@@ -16,6 +16,19 @@ The plugin focuses on task-based segmentation workflows:
 - downstream mask cleanup, merge, and export operations
 
 
+
+## What's New in 4.2.3 SAM3 video diagnostics and performance logging
+
+Version 4.2.3 adds an opt-in diagnostic mode for SAM3.1 video and 3D propagation performance troubleshooting.
+![Activate SAM3 diagnostics option](docs/activate%20diagnostic%20option.png)
+
+- Added a `Log SAM3.1 diagnostics` checkbox in `Advanced > Step 2. Task Setup > Advanced`.
+- When enabled, the plugin records detailed SAM3 video timing and runtime diagnostics during model loading, session startup, prompt insertion, propagation, and napari label writing.
+- The diagnostic mode is intended for comparing SAM3.1 multiplex performance across machines, CUDA/PyTorch builds, and plugin execution paths.
+- The option is off by default so normal users are not exposed to extra debug logging during routine segmentation.
+
+![Activate SAM3.1 diagnostics option](docs/activate%20diagnostic%20option.png)
+
 ## What's New in 4.2.2 Optional completion chime for long runs
 
 SAM3 Assistant can play a short, soft completion chime when a long-running task finishes.

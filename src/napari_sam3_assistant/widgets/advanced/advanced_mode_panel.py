@@ -3,6 +3,7 @@ import csv
 import gc
 from pathlib import Path
 import re
+import time
 from typing import Any
 
 import numpy as np
@@ -63,6 +64,7 @@ from ...device_utils import (
     runtime_device,
 )
 from ...core.models import PromptBundle, Sam3Result, Sam3Session, Sam3Task
+from ...core.diagnostics import Sam3Diagnostics
 from ...providers.sam3_repo_provider import Sam3RepoProvider
 from ...services.checkpoint_service import CheckpointService
 from ...services.layer_writer import LayerWriter
@@ -737,6 +739,11 @@ class AdvancedModePanel(QWidget):
 
         self.propagation_direction_combo = QComboBox()
         self.propagation_direction_combo.addItems(["both", "forward", "backward"])
+        self.sam31_diagnostics_check = QCheckBox("Log SAM3.1 diagnostics")
+        self.sam31_diagnostics_check.setToolTip(
+            "Log CUDA state, SAM3.1 session internals, and per-frame propagation timing."
+        )
+        self.sam31_diagnostics_check.toggled.connect(lambda _checked: self._save_settings())
 
         task_layout.addRow("Task", self.task_combo)
         task_layout.addRow("Target image", self.image_layer_combo)
@@ -759,6 +766,7 @@ class AdvancedModePanel(QWidget):
         advanced_layout.addRow("", hint)
         advanced_layout.addRow("Detection threshold", self.confidence_threshold_spin)
         advanced_layout.addRow("3D direction", self.propagation_direction_combo)
+        advanced_layout.addRow("", self.sam31_diagnostics_check)
         advanced_content.setLayout(advanced_layout)
 
         self._task_setup_form = task_layout
@@ -1184,6 +1192,9 @@ class AdvancedModePanel(QWidget):
         is_video = self._current_task() == Sam3Task.SEGMENT_3D
         self.propagation_direction_combo.setEnabled(is_video)
         self.propagation_direction_combo.setVisible(is_video)
+        if hasattr(self, "sam31_diagnostics_check"):
+            self.sam31_diagnostics_check.setEnabled(is_video)
+            self.sam31_diagnostics_check.setVisible(is_video)
         if (
             hasattr(self, "_propagation_direction_row_label")
             and self._propagation_direction_row_label is not None
@@ -1549,14 +1560,46 @@ class AdvancedModePanel(QWidget):
             self._log(f"Cannot run video task: {exc}")
             return
         direction = self.propagation_direction_combo.currentText()
+        diagnostics = Sam3Diagnostics(self._log) if self._sam31_diagnostics_enabled() else None
+        if diagnostics is not None:
+            diagnostics.log(
+                "SAM3.1 image source: "
+                f"{diagnostics.describe_image_source(image_layer.data)}"
+            )
+            diagnostics.log_prompt_diagnostics(bundle)
 
         @thread_worker
         def run_video():
+            if diagnostics is not None:
+                diagnostics.log_cuda_diagnostics("before start_video_session")
+                diagnostics.log_runtime_diagnostics(adapter, stage="before session start")
+                session_t0 = time.perf_counter()
             session = adapter.start_video_session(image_layer.data, bundle)
+            if diagnostics is not None:
+                diagnostics.log_timing("SAM3.1 session start", session_t0)
+                diagnostics.log(
+                    "SAM3.1 session ready: "
+                    f"{session.session_id}; prompt_frame={bundle.image.frame_index or 0}; "
+                    f"boxes={len(getattr(bundle, 'boxes', []) or [])}; "
+                    f"points={len(getattr(bundle, 'points', []) or [])}."
+                )
+                diagnostics.log_session_diagnostics(adapter, session, stage="after session start")
+                prompt_t0 = time.perf_counter()
             prompt_result = adapter.add_video_prompt(bundle, session)
+            if diagnostics is not None:
+                diagnostics.log_timing("SAM3.1 prompt insertion", prompt_t0)
+                diagnostics.log_session_diagnostics(adapter, session, stage="after prompt insertion")
             prompt_result.metadata["image_layer"] = bundle.image.layer_name
             yield prompt_result
-            for result in adapter.propagate_video(bundle, session, direction=direction):
+            if diagnostics is not None:
+                diagnostics.log_cuda_diagnostics("before propagation")
+                diagnostics.log_runtime_diagnostics(adapter, stage="before propagation")
+                iterator = diagnostics.iter_propagation_with_timing(
+                    adapter.propagate_video(bundle, session, direction=direction)
+                )
+            else:
+                iterator = adapter.propagate_video(bundle, session, direction=direction)
+            for result in iterator:
                 result.metadata["image_layer"] = bundle.image.layer_name
                 yield result
             return session
@@ -1590,10 +1633,23 @@ class AdvancedModePanel(QWidget):
             return
         session = self.video_session
         direction = self.propagation_direction_combo.currentText()
+        diagnostics = Sam3Diagnostics(self._log) if self._sam31_diagnostics_enabled() else None
+        if diagnostics is not None:
+            diagnostics.log_prompt_diagnostics(bundle)
+            diagnostics.log_session_diagnostics(adapter, session, stage="before existing-session propagation")
+            diagnostics.log_cuda_diagnostics("before existing-session propagation")
+            diagnostics.log_runtime_diagnostics(adapter, stage="before existing-session propagation")
 
         @thread_worker
         def propagate():
-            for result in adapter.propagate_video(bundle, session, direction=direction):
+            if diagnostics is not None:
+                iterator = diagnostics.iter_propagation_with_timing(
+                    adapter.propagate_video(bundle, session, direction=direction),
+                    label="SAM3.1 existing-session propagation",
+                )
+            else:
+                iterator = adapter.propagate_video(bundle, session, direction=direction)
+            for result in iterator:
                 result.metadata["image_layer"] = bundle.image.layer_name
                 yield result
             return session
@@ -1750,6 +1806,13 @@ class AdvancedModePanel(QWidget):
 
     def _large_image_mode_enabled(self) -> bool:
         return bool(hasattr(self, "large_image_check") and self.large_image_check.isChecked())
+
+    def _sam31_diagnostics_enabled(self) -> bool:
+        return bool(
+            hasattr(self, "sam31_diagnostics_check")
+            and self.sam31_diagnostics_check.isChecked()
+            and self._current_task() == Sam3Task.SEGMENT_3D
+        )
 
     def _selected_roi_size(self) -> tuple[int, int]:
         if not hasattr(self, "roi_size_combo"):
@@ -2050,10 +2113,12 @@ class AdvancedModePanel(QWidget):
         else:
             device = runtime_device(torch.cuda.is_available())
         threshold = self.settings.value("confidence_threshold", 0.35, type=float)
+        sam31_diagnostics = self.settings.value("sam31_diagnostics", False, type=bool)
 
         old_model_signals = self.model_type_combo.blockSignals(True)
         old_device_signals = self.device_combo.blockSignals(True)
         old_threshold_signals = self.confidence_threshold_spin.blockSignals(True)
+        old_diagnostics_signals = self.sam31_diagnostics_check.blockSignals(True)
         try:
             index = self.model_type_combo.findData(model_type)
             if index >= 0:
@@ -2069,10 +2134,12 @@ class AdvancedModePanel(QWidget):
                 )
             )
             self.confidence_threshold_spin.setValue(float(threshold))
+            self.sam31_diagnostics_check.setChecked(bool(sam31_diagnostics))
         finally:
             self.model_type_combo.blockSignals(old_model_signals)
             self.device_combo.blockSignals(old_device_signals)
             self.confidence_threshold_spin.blockSignals(old_threshold_signals)
+            self.sam31_diagnostics_check.blockSignals(old_diagnostics_signals)
 
         output_dir = self.settings.value("quick_mask_output_dir", "", type=str)
         if hasattr(self, "preview_output_folder_edit"):
@@ -2102,6 +2169,8 @@ class AdvancedModePanel(QWidget):
             self.settings.setValue("quick_mask_output_dir", self.preview_output_folder_edit.text().strip())
         if hasattr(self, "preview_output_format_combo"):
             self.settings.setValue("quick_mask_output_format", self.preview_output_format_combo.currentText())
+        if hasattr(self, "sam31_diagnostics_check"):
+            self.settings.setValue("sam31_diagnostics", self.sam31_diagnostics_check.isChecked())
 
     def _on_model_type_changed(self) -> None:
         self._save_settings()

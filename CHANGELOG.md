@@ -2,6 +2,21 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+
+## 4.2.3
+
+### Added
+- Added an opt-in `Log SAM3.1 diagnostics` checkbox under `Advanced > Step 2. Task Setup > Advanced`.
+- Added SAM3 video diagnostics for troubleshooting model loading, video-session startup, prompt insertion, propagation timing, and napari frame-writing performance.
+- Added a dedicated diagnostics module for centralized debug/performance logging.
+- Added README documentation and a screenshot showing where to enable the diagnostics option.
+
+### Changed
+- SAM3.1 video performance instrumentation is now user-controllable from the UI and remains off by default for normal runs.
+
+### Notes
+- This release is intended to support performance comparison across SAM3 Assistant, training-assistant integrations, Windows CUDA setups, and Linux/DGX-style environments without changing normal segmentation behavior.
+
 ## 4.2.2
 
 ### Changed
