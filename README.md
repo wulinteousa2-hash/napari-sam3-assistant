@@ -27,7 +27,6 @@ Version 4.2.3 adds an opt-in diagnostic mode for SAM3.1 video and 3D propagation
 - The diagnostic mode is intended for comparing SAM3.1 multiplex performance across machines, CUDA/PyTorch builds, and plugin execution paths.
 - The option is off by default so normal users are not exposed to extra debug logging during routine segmentation.
 
-![Activate SAM3.1 diagnostics option](docs/activate%20diagnostic%20option.png)
 
 ## What's New in 4.2.2 Optional completion chime for long runs
 
