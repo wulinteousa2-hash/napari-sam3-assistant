@@ -7,7 +7,7 @@ date-released: "2026-05-02"
 authors:
   - family-names: "Teo"
     given-names: "Wulin"
-    orcid: "https://orcid.org/0000-0002-2529-5621"
+    orcid: "https://orcid.org/0000-0001-7815-7014"
 repository-code: "https://github.com/wulinteousa2-hash/napari-sam3-assistant"
 url: "https://github.com/wulinteousa2-hash/napari-sam3-assistant"
 license: "MIT"
