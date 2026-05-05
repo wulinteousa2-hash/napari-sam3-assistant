@@ -29,11 +29,23 @@ class ComponentTableWidget(QTableWidget):
         delete_callback: Callable[[], None] | None = None,
         locate_callback: Callable[[int], None] | None = None,
     ) -> None:
-        super().__init__(0, 6)
+        super().__init__(0, 9)
         self._delete_callback = delete_callback
         self._locate_callback = locate_callback
         self.setObjectName("componentAnalysisTable")
-        self.setHorizontalHeaderLabels(["Component ID", "Label", "Area", "Centroid Y", "Centroid X", "BBox"])
+        self.setHorizontalHeaderLabels(
+            [
+                "Component ID",
+                "Label",
+                "Pixels/Voxels",
+                "Z Min",
+                "Z Max",
+                "Centroid Z",
+                "Centroid Y",
+                "Centroid X",
+                "BBox",
+            ]
+        )
         self.setAlternatingRowColors(True)
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -88,9 +100,12 @@ class ComponentTableWidget(QTableWidget):
             self._set_numeric_item(row, 0, record.component_id)
             self._set_numeric_item(row, 1, record.label_value)
             self._set_numeric_item(row, 2, record.area)
-            self._set_float_item(row, 3, record.centroid_y)
-            self._set_float_item(row, 4, record.centroid_x)
-            self.setItem(row, 5, QTableWidgetItem(record.bbox_text))
+            self._set_optional_numeric_item(row, 3, record.z_min)
+            self._set_optional_numeric_item(row, 4, record.z_max)
+            self._set_optional_float_item(row, 5, record.centroid_z)
+            self._set_float_item(row, 6, record.centroid_y)
+            self._set_float_item(row, 7, record.centroid_x)
+            self.setItem(row, 8, QTableWidgetItem(record.bbox_text))
         self.setSortingEnabled(True)
 
     def selected_component_ids(self) -> list[int]:
@@ -112,9 +127,25 @@ class ComponentTableWidget(QTableWidget):
         item.setData(Qt.UserRole, int(value))
         self.setItem(row, column, item)
 
+    def _set_optional_numeric_item(self, row: int, column: int, value: int | None) -> None:
+        if value is None:
+            item = QTableWidgetItem("—")
+        else:
+            item = NumericTableWidgetItem(str(value))
+            item.setData(Qt.UserRole, int(value))
+        self.setItem(row, column, item)
+
     def _set_float_item(self, row: int, column: int, value: float) -> None:
         item = NumericTableWidgetItem(f"{value:.2f}")
         item.setData(Qt.UserRole, float(value))
+        self.setItem(row, column, item)
+
+    def _set_optional_float_item(self, row: int, column: int, value: float | None) -> None:
+        if value is None:
+            item = QTableWidgetItem("—")
+        else:
+            item = NumericTableWidgetItem(f"{value:.2f}")
+            item.setData(Qt.UserRole, float(value))
         self.setItem(row, column, item)
 
     def _open_context_menu(self, position) -> None:

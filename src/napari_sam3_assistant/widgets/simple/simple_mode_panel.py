@@ -33,9 +33,11 @@ class SimpleModePanel(QWidget):
         self.content.setMaximumWidth(SIMPLE_CONTENT_WIDTH)
         self.content.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
         self.toggle_point_shortcut = QShortcut(QKeySequence("T"), self)
-        self.toggle_point_shortcut.activated.connect(self.controller.toggle_next_point_mode)
+        self.toggle_point_shortcut.setContext(Qt.ApplicationShortcut)
+        self.toggle_point_shortcut.activated.connect(self._toggle_next_point_mode_shortcut)
         self.flip_point_shortcut = QShortcut(QKeySequence("Shift+T"), self)
-        self.flip_point_shortcut.activated.connect(self.controller.flip_existing_point_polarity)
+        self.flip_point_shortcut.setContext(Qt.ApplicationShortcut)
+        self.flip_point_shortcut.activated.connect(self._flip_existing_point_polarity_shortcut)
 
         content_layout = QVBoxLayout()
         content_layout.setContentsMargins(0, 0, 0, 0)
@@ -67,6 +69,16 @@ class SimpleModePanel(QWidget):
     def _run_current_task(self) -> None:
         self.prompt_panel.sync_to_shared_state()
         self.controller.run_current_task()
+
+    def _toggle_next_point_mode_shortcut(self) -> None:
+        if self.shared_context.get_mode() != "simple":
+            return
+        self.controller.toggle_next_point_mode()
+
+    def _flip_existing_point_polarity_shortcut(self) -> None:
+        if self.shared_context.get_mode() != "simple":
+            return
+        self.controller.flip_existing_point_polarity()
 
     def _connect_viewer_events(self) -> None:
         viewer = self.shared_context.viewer

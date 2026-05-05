@@ -30,6 +30,8 @@ UNDO_HISTORY_LIMIT = 20
 
 
 class MaskCleanupTab(QWidget):
+    """Friction-light cleanup for 2D/3D binary, semantic, and instance masks."""
+
     def __init__(self, viewer, log_callback: Callable[[str], None], refresh_callback: Callable[[], None]) -> None:
         super().__init__()
         self.viewer = viewer
@@ -44,6 +46,8 @@ class MaskCleanupTab(QWidget):
         self._tracked_layer = None
         self._history_callback = self._on_tracked_layer_data_changed
         self._suppress_history_event = False
+        self._last_analysis_indexer: object = Ellipsis
+        self._last_analysis_offset: tuple[int, ...] | None = None
         self._build_ui()
         self.refresh()
 
@@ -55,6 +59,7 @@ class MaskCleanupTab(QWidget):
         index = self.target_combo.findData(current)
         if index >= 0:
             self.target_combo.setCurrentIndex(index)
+        self._sync_scope_controls()
         self.refresh_unique_values()
         self._track_target_layer()
         self._sync_mouse_delete_callback()
@@ -64,9 +69,13 @@ class MaskCleanupTab(QWidget):
         if layer is None:
             self._log("Select a target Labels layer for component analysis.")
             return
-        records = self.analysis.analyze(layer.data)
+        sub, indexer, offset = self._scoped_data(layer)
+        records = self.analysis.analyze(sub)
+        self._last_analysis_indexer = indexer
+        self._last_analysis_offset = offset
         self.component_table.set_records(records)
-        self._log(f"Analyzed {len(records)} connected component(s) in {layer.name}.")
+        scope = self._scope_label(layer)
+        self._log(f"Analyzed {len(records)} connected component(s) in {layer.name} ({scope}).")
 
     def delete_selected_components(self) -> None:
         layer = self._target_layer()
@@ -75,8 +84,13 @@ class MaskCleanupTab(QWidget):
             self._log("Select component rows to delete.")
             return
         masks = self.analysis.component_masks(ids)
-        data = self.cleanup.delete_components(layer.data, masks)
-        if self._replace_layer_data(layer, data, "delete selected components"):
+        sub, indexer, _offset = self._scoped_data(layer)
+        try:
+            cleaned = self.cleanup.delete_components(sub, masks)
+        except ValueError as exc:
+            self._log(str(exc) + " Re-run Analyze Layer after changing scope or target layer.")
+            return
+        if self._replace_scoped_layer_data(layer, cleaned, indexer, "delete selected components"):
             self._log(f"Deleted {len(masks)} selected component(s) from {layer.name}.")
             self.analyze_layer()
             self.refresh_unique_values()
@@ -85,56 +99,32 @@ class MaskCleanupTab(QWidget):
             self._log("Selected component delete made no mask changes.")
 
     def remove_small_objects(self) -> None:
-        layer = self._target_layer()
-        if layer is None:
-            self._log("Select a target Labels layer.")
-            return
-        data = self.cleanup.remove_small_objects(layer.data, self.min_size_spin.value())
-        if self._replace_layer_data(layer, data, "remove small objects"):
-            self._log(f"Removed components smaller than {self.min_size_spin.value()} pixels from {layer.name}.")
-            self.analyze_layer()
-            self.refresh_unique_values()
-        else:
-            self._log("Remove small objects made no mask changes.")
+        self._apply_scoped_cleanup(
+            lambda sub: self.cleanup.remove_small_objects(sub, self.min_size_spin.value()),
+            f"Removed components smaller than {self.min_size_spin.value()} pixels/voxels",
+            "remove small objects",
+        )
 
     def fill_holes(self) -> None:
-        layer = self._target_layer()
-        if layer is None:
-            self._log("Select a target Labels layer.")
-            return
-        data = self.cleanup.fill_holes(layer.data, self.hole_size_spin.value())
-        if self._replace_layer_data(layer, data, "fill holes"):
-            self._log(f"Filled holes up to {self.hole_size_spin.value()} pixels in {layer.name}.")
-            self.analyze_layer()
-            self.refresh_unique_values()
-        else:
-            self._log("Fill holes made no mask changes.")
+        self._apply_scoped_cleanup(
+            lambda sub: self.cleanup.fill_holes(sub, self.hole_size_spin.value()),
+            f"Filled holes up to {self.hole_size_spin.value()} pixels/voxels",
+            "fill holes",
+        )
 
     def smooth_mask(self) -> None:
-        layer = self._target_layer()
-        if layer is None:
-            self._log("Select a target Labels layer.")
-            return
-        data = self.cleanup.smooth(layer.data, self.smoothing_spin.value())
-        if self._replace_layer_data(layer, data, "smooth mask"):
-            self._log(f"Smoothed mask {layer.name} with radius {self.smoothing_spin.value()}.")
-            self.analyze_layer()
-            self.refresh_unique_values()
-        else:
-            self._log("Smooth mask made no mask changes.")
+        self._apply_scoped_cleanup(
+            lambda sub: self.cleanup.smooth(sub, self.smoothing_spin.value()),
+            f"Smoothed mask with radius {self.smoothing_spin.value()}",
+            "smooth mask",
+        )
 
     def keep_largest_object(self) -> None:
-        layer = self._target_layer()
-        if layer is None:
-            self._log("Select a target Labels layer.")
-            return
-        data = self.cleanup.keep_largest_object(layer.data)
-        if self._replace_layer_data(layer, data, "keep largest object"):
-            self._log(f"Kept largest connected component in {layer.name}.")
-            self.analyze_layer()
-            self.refresh_unique_values()
-        else:
-            self._log("Keep largest object made no mask changes.")
+        self._apply_scoped_cleanup(
+            self.cleanup.keep_largest_object,
+            "Kept largest connected component",
+            "keep largest object",
+        )
 
     def apply_relabel(self) -> None:
         layer = self._target_layer()
@@ -146,29 +136,81 @@ class MaskCleanupTab(QWidget):
         except ValueError as exc:
             self._log(str(exc))
             return
-        data, changed = self.cleanup.relabel_values(layer.data, source_values, self.new_value_spin.value())
-        if changed and self._replace_layer_data(layer, data, "relabel values"):
-            self._log(f"Relabeled {changed} pixel(s) in {layer.name}.")
+        sub, indexer, _offset = self._scoped_data(layer)
+        data, changed = self.cleanup.relabel_values(sub, source_values, self.new_value_spin.value())
+        if changed and self._replace_scoped_layer_data(layer, data, indexer, "relabel values"):
+            self._log(f"Relabeled {changed} pixel(s)/voxel(s) in {layer.name}.")
             self.analyze_layer()
             self.refresh_unique_values()
         else:
             self._log("Relabel made no mask changes.")
 
     def change_selected_values(self) -> None:
-        values: list[int] = []
-        for index in self.unique_values_table.selectionModel().selectedRows():
-            item = self.unique_values_table.item(index.row(), 0)
-            if item is not None:
-                values.append(int(item.text()))
+        values = self._selected_unique_values()
+        if not values:
+            self._log("Select one or more label values in the value table.")
+            return
         self.values_to_replace_edit.setText(",".join(str(value) for value in values))
         self.apply_relabel()
+
+    def delete_selected_values(self) -> None:
+        values = self._selected_unique_values()
+        if not values:
+            self._log("Select one or more label values to delete.")
+            return
+        layer = self._target_layer()
+        if layer is None:
+            return
+        sub, indexer, _offset = self._scoped_data(layer)
+        data, changed = self.cleanup.delete_values(sub, values)
+        if changed and self._replace_scoped_layer_data(layer, data, indexer, "delete selected values"):
+            self._log(f"Deleted label value(s) {values} from {layer.name} ({changed} pixel(s)/voxel(s)).")
+            self.analyze_layer()
+            self.refresh_unique_values()
+            self._refresh_all()
+        else:
+            self._log("Delete selected values made no mask changes.")
+
+    def keep_selected_values_only(self) -> None:
+        values = self._selected_unique_values()
+        if not values:
+            self._log("Select one or more label values to keep.")
+            return
+        layer = self._target_layer()
+        if layer is None:
+            return
+        sub, indexer, _offset = self._scoped_data(layer)
+        data, changed = self.cleanup.keep_values(sub, values)
+        if changed and self._replace_scoped_layer_data(layer, data, indexer, "keep selected values only"):
+            self._log(f"Kept only label value(s) {values} in {layer.name}.")
+            self.analyze_layer()
+            self.refresh_unique_values()
+            self._refresh_all()
+        else:
+            self._log("Keep selected values made no mask changes.")
+
+    def convert_nonzero_to_new_value(self) -> None:
+        layer = self._target_layer()
+        if layer is None:
+            self._log("Select a target Labels layer.")
+            return
+        sub, indexer, _offset = self._scoped_data(layer)
+        data, changed = self.cleanup.convert_nonzero_to_value(sub, self.new_value_spin.value())
+        if changed and self._replace_scoped_layer_data(layer, data, indexer, "convert non-zero to class"):
+            self._log(f"Converted non-zero labels to class value {self.new_value_spin.value()} in {layer.name}.")
+            self.analyze_layer()
+            self.refresh_unique_values()
+            self._refresh_all()
+        else:
+            self._log("Convert non-zero made no mask changes.")
 
     def refresh_unique_values(self) -> None:
         layer = self._target_layer()
         self.unique_values_table.setRowCount(0)
         if layer is None:
             return
-        values, counts = np.unique(layer.data, return_counts=True)
+        sub, _indexer, _offset = self._scoped_data(layer)
+        values, counts = np.unique(sub, return_counts=True)
         for value, count in zip(values, counts, strict=False):
             if int(value) == 0:
                 continue
@@ -220,13 +262,15 @@ class MaskCleanupTab(QWidget):
         if label_value <= 0:
             self._log("Right-clicked background; no label removed.")
             return
-        data = np.asarray(layer.data).copy()
-        removed = int(np.count_nonzero(data == label_value))
+        sub, indexer, _offset = self._scoped_data(layer)
+        data, removed = self.cleanup.delete_values(sub, [label_value])
         if removed == 0:
             return
-        data[data == label_value] = 0
-        if self._replace_layer_data(layer, data, "right-click delete"):
-            self._log(f"Removed label value {label_value} from '{layer.name}' ({removed} pixel(s)).")
+        if self._replace_scoped_layer_data(layer, data, indexer, "right-click delete"):
+            self._log(
+                f"Removed label value {label_value} from '{layer.name}' in {self._scope_label(layer)} "
+                f"({removed} pixel(s)/voxel(s))."
+            )
             self.analyze_layer()
             self.refresh_unique_values()
             self._refresh_all()
@@ -258,6 +302,19 @@ class MaskCleanupTab(QWidget):
         target_form = QFormLayout()
         self.target_combo = QComboBox()
         self.target_combo.currentIndexChanged.connect(self._on_target_layer_changed)
+        self.scope_combo = QComboBox()
+        self.scope_combo.addItem("Current slice", "current_slice")
+        self.scope_combo.addItem("Z range", "z_range")
+        self.scope_combo.addItem("Whole volume", "whole_volume")
+        self.scope_combo.currentIndexChanged.connect(self._on_scope_changed)
+        self.z_start_spin = QSpinBox()
+        self.z_end_spin = QSpinBox()
+        self.z_start_spin.valueChanged.connect(lambda _value: self.refresh_unique_values())
+        self.z_end_spin.valueChanged.connect(lambda _value: self.refresh_unique_values())
+        z_row = QHBoxLayout()
+        z_row.addWidget(self.z_start_spin)
+        z_row.addWidget(QLabel("to"))
+        z_row.addWidget(self.z_end_spin)
         refresh_btn = QPushButton("Refresh")
         refresh_btn.clicked.connect(self.refresh)
         analyze_btn = QPushButton("Analyze Layer")
@@ -270,11 +327,9 @@ class MaskCleanupTab(QWidget):
         self.undo_btn.setEnabled(False)
         self.right_click_delete_check = QCheckBox("Right-click Delete")
         self.right_click_delete_check.setToolTip(
-            "Right-click a label object in the selected target Labels layer to remove that label value."
+            "Right-click a label object in the selected target Labels layer to remove that label value within the selected scope."
         )
-        self.right_click_delete_check.toggled.connect(
-            lambda _checked: self._sync_mouse_delete_callback()
-        )
+        self.right_click_delete_check.toggled.connect(lambda _checked: self._sync_mouse_delete_callback())
         target_row = QHBoxLayout()
         target_row.addWidget(refresh_btn)
         target_row.addWidget(analyze_btn)
@@ -282,6 +337,8 @@ class MaskCleanupTab(QWidget):
         target_row.addWidget(self.undo_btn)
         target_row.addWidget(self.right_click_delete_check)
         target_form.addRow("Target labels layer", self.target_combo)
+        target_form.addRow("Operation scope", self.scope_combo)
+        target_form.addRow("Z range", z_row)
         target_form.addRow(target_row)
         root.addLayout(target_form)
 
@@ -321,7 +378,7 @@ class MaskCleanupTab(QWidget):
 
         self.unique_values_table = QTableWidget(0, 2)
         self.unique_values_table.setObjectName("maskValueTable")
-        self.unique_values_table.setHorizontalHeaderLabels(["Value", "Pixels"])
+        self.unique_values_table.setHorizontalHeaderLabels(["Value", "Pixels/Voxels"])
         self.unique_values_table.setAlternatingRowColors(True)
         self.unique_values_table.verticalHeader().setDefaultSectionSize(24)
         self.unique_values_table.verticalHeader().setMinimumSectionSize(22)
@@ -355,25 +412,27 @@ class MaskCleanupTab(QWidget):
         self.new_value_spin.setValue(1)
         apply_btn = QPushButton("Apply Relabel")
         apply_btn.clicked.connect(self.apply_relabel)
-        selected_btn = QPushButton("Change Selected To")
+        selected_btn = QPushButton("Assign Selected To")
         selected_btn.clicked.connect(self.change_selected_values)
+        delete_values_btn = QPushButton("Delete Selected Values")
+        delete_values_btn.clicked.connect(self.delete_selected_values)
+        keep_values_btn = QPushButton("Keep Selected Only")
+        keep_values_btn.clicked.connect(self.keep_selected_values_only)
+        convert_btn = QPushButton("Convert Non-zero To Class")
+        convert_btn.clicked.connect(self.convert_nonzero_to_new_value)
         relabel_form.addRow("Values to replace", self.values_to_replace_edit)
-        relabel_form.addRow("New value", self.new_value_spin)
+        relabel_form.addRow("New class/value", self.new_value_spin)
         relabel_buttons = QHBoxLayout()
         relabel_buttons.addWidget(apply_btn)
         relabel_buttons.addWidget(selected_btn)
+        relabel_buttons.addWidget(delete_values_btn)
+        relabel_buttons.addWidget(keep_values_btn)
+        relabel_buttons.addWidget(convert_btn)
         relabel_form.addRow(relabel_buttons)
         root.addLayout(relabel_form)
         self.setLayout(root)
 
-    def _add_operation_row(
-        self,
-        layout: QGridLayout,
-        row: int,
-        label_text: str,
-        spin_box: QSpinBox,
-        button: QPushButton,
-    ) -> None:
+    def _add_operation_row(self, layout: QGridLayout, row: int, label_text: str, spin_box: QSpinBox, button: QPushButton) -> None:
         label = QLabel(label_text)
         spin_box.setMinimumWidth(84)
         spin_box.setMaximumWidth(140)
@@ -382,14 +441,121 @@ class MaskCleanupTab(QWidget):
         layout.addWidget(spin_box, row, 1)
         layout.addWidget(button, row, 2)
 
+    def _apply_scoped_cleanup(self, callback, success_prefix: str, action: str) -> None:
+        layer = self._target_layer()
+        if layer is None:
+            self._log("Select a target Labels layer.")
+            return
+        sub, indexer, _offset = self._scoped_data(layer)
+        data = callback(sub)
+        if self._replace_scoped_layer_data(layer, data, indexer, action):
+            self._log(f"{success_prefix} in {layer.name} ({self._scope_label(layer)}).")
+            self.analyze_layer()
+            self.refresh_unique_values()
+            self._refresh_all()
+        else:
+            self._log(f"{action} made no mask changes.")
+
     def _target_layer(self):
         return safe_get_layer(self.viewer, self.target_combo.currentData())
 
     def _on_target_layer_changed(self, _index: int) -> None:
+        self._sync_scope_controls()
         self.refresh_unique_values()
         self._track_target_layer()
         self._sync_mouse_delete_callback()
         self._update_undo_state()
+
+    def _on_scope_changed(self, _index: int) -> None:
+        self._sync_scope_controls()
+        self.refresh_unique_values()
+
+    def _sync_scope_controls(self) -> None:
+        layer = self._target_layer()
+        data = np.asarray(layer.data) if layer is not None else None
+        has_z = data is not None and data.ndim >= 3
+        z_axis = data.ndim - 3 if has_z else 0
+        z_max = int(data.shape[z_axis] - 1) if has_z else 0
+        for spin in (self.z_start_spin, self.z_end_spin):
+            old = min(int(spin.value()), z_max)
+            spin.blockSignals(True)
+            spin.setRange(0, z_max)
+            spin.setValue(old)
+            spin.setEnabled(has_z and self.scope_combo.currentData() == "z_range")
+            spin.blockSignals(False)
+        self.scope_combo.setEnabled(has_z)
+        if not has_z:
+            idx = self.scope_combo.findData("whole_volume")
+            if idx >= 0:
+                self.scope_combo.setCurrentIndex(idx)
+        elif self.scope_combo.currentData() == "current_slice":
+            z = self._current_z(data, z_axis)
+            self.z_start_spin.setValue(z)
+            self.z_end_spin.setValue(z)
+
+    def _scoped_data(self, layer) -> tuple[np.ndarray, object, tuple[int, ...]]:
+        arr = np.asarray(layer.data)
+        if arr.ndim < 3:
+            return arr.copy(), Ellipsis, tuple(0 for _ in range(arr.ndim))
+        scope = self.scope_combo.currentData()
+        z_axis = arr.ndim - 3
+        if scope == "whole_volume":
+            return arr.copy(), Ellipsis, tuple(0 for _ in range(arr.ndim))
+        if scope == "current_slice":
+            z = self._current_z(arr, z_axis)
+            indexer = [slice(None)] * arr.ndim
+            indexer[z_axis] = z
+            offset = [0] * arr.ndim
+            offset[z_axis] = z
+            reduced_offset = [v for axis, v in enumerate(offset) if axis != z_axis]
+            return arr[tuple(indexer)].copy(), tuple(indexer), tuple(reduced_offset)
+        z0 = min(int(self.z_start_spin.value()), int(self.z_end_spin.value()))
+        z1 = max(int(self.z_start_spin.value()), int(self.z_end_spin.value()))
+        indexer = [slice(None)] * arr.ndim
+        indexer[z_axis] = slice(z0, z1 + 1)
+        offset = [0] * arr.ndim
+        offset[z_axis] = z0
+        return arr[tuple(indexer)].copy(), tuple(indexer), tuple(offset)
+
+    def _replace_scoped_layer_data(self, layer, scoped_data: np.ndarray, indexer: object, action: str) -> bool:
+        current = np.asarray(layer.data)
+        if indexer is Ellipsis:
+            updated = np.asarray(scoped_data)
+        else:
+            updated = current.copy()
+            updated[indexer] = scoped_data
+        return self._replace_layer_data(layer, updated, action)
+
+    def _current_z(self, arr: np.ndarray, z_axis: int) -> int:
+        dims = getattr(self.viewer, "dims", None)
+        if dims is None:
+            return 0
+        try:
+            return max(0, min(int(dims.current_step[z_axis]), arr.shape[z_axis] - 1))
+        except Exception:
+            return 0
+
+    def _scope_label(self, layer) -> str:
+        data = np.asarray(layer.data)
+        if data.ndim < 3:
+            return "2D layer"
+        scope = self.scope_combo.currentData()
+        z_axis = data.ndim - 3
+        if scope == "whole_volume":
+            return "whole volume"
+        if scope == "current_slice":
+            return f"Z={self._current_z(data, z_axis)}"
+        z0 = min(int(self.z_start_spin.value()), int(self.z_end_spin.value()))
+        z1 = max(int(self.z_start_spin.value()), int(self.z_end_spin.value()))
+        return f"Z={z0}-{z1}"
+
+    def _selected_unique_values(self) -> list[int]:
+        values: list[int] = []
+        for index in self.unique_values_table.selectionModel().selectedRows():
+            item = self.unique_values_table.item(index.row(), 0)
+            if item is not None:
+                values.append(int(item.text()))
+        return values
 
     def undo_last_edit(self) -> None:
         layer = self._target_layer()
@@ -428,6 +594,7 @@ class MaskCleanupTab(QWidget):
             self._last_layer_data[id(layer)] = np.asarray(layer.data).copy()
         finally:
             self._suppress_history_event = False
+        self._update_undo_state()
         return True
 
     def _push_undo_state(self, layer, action: str) -> None:
@@ -511,6 +678,8 @@ class MaskCleanupTab(QWidget):
             self._log(f"Component {component_id} is empty or no longer exists.")
             return
         data_position = coords.mean(axis=0)
+        if self._last_analysis_offset is not None and len(self._last_analysis_offset) == len(data_position):
+            data_position = data_position + np.asarray(self._last_analysis_offset, dtype=float)
         label_value = self._label_value_near(layer, data_position)
         self._center_view_on_data_position(layer, data_position)
         detail = f" label {label_value}" if label_value > 0 else ""
@@ -522,14 +691,12 @@ class MaskCleanupTab(QWidget):
             world_position = tuple(float(value) for value in layer.data_to_world(data_tuple))
         except Exception:
             world_position = data_tuple
-
         dims = getattr(self.viewer, "dims", None)
         displayed = self._displayed_axes(dims, len(world_position))
         if dims is not None:
             for axis, value in enumerate(data_position):
                 if axis not in displayed:
                     self._set_dim_step(dims, axis, int(round(float(value))))
-
         camera = getattr(self.viewer, "camera", None)
         if camera is not None:
             center = tuple(world_position[axis] for axis in displayed if axis < len(world_position))
@@ -538,7 +705,6 @@ class MaskCleanupTab(QWidget):
                     camera.center = center
                 except Exception:
                     pass
-
         try:
             self.viewer.layers.selection.active = layer
             layer.mode = "pick"

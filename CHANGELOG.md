@@ -2,6 +2,20 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.2.4
+
+### Added
+- Added expanded Mask Operations workflows for 2D and 3D masks.
+- Added support for binary and multiclass mask cleanup workflows in Mask Operations.
+- Added class-aware mask handling so users can clean and manage multiclass segmentation outputs more directly.
+
+### Changed
+- Updated the Mask Operations UI to better support accepted objects, class conversion, component review, and cleanup workflows.
+
+### Fixed
+- Fixed Live Points keyboard shortcuts so `T` toggles the next point mode and `Shift+T` flips the selected/latest point even when focus is on the napari canvas.
+- Kept Live Points shortcuts scoped to the active Simple or Advanced mode so the two panels do not both respond to the same key press.
+
 
 ## 4.2.3
 

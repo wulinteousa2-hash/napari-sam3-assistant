@@ -80,6 +80,10 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     assert "Apply mode to selected points" in advanced_source
     assert "Add the first point to start Live Points; first run may load the model." in advanced_source
     assert "T = next point mode only. Shift+T = flip selected/latest point and rerun." in advanced_source
+    assert "shortcuts_enabled_callback=self._live_refinement_shortcuts_enabled" in advanced_source
+    assert 'self.shared_context.get_mode() != "advanced"' in advanced_source
+    assert "Qt.ApplicationShortcut" in Path("src/napari_sam3_assistant/widgets/live_point_refinement.py").read_text(encoding="utf-8")
+    assert "Qt.ApplicationShortcut" in Path("src/napari_sam3_assistant/widgets/simple/simple_mode_panel.py").read_text(encoding="utf-8")
     assert "Run a new 3D/video preview before propagating again." in advanced_source
     assert "Cancelled 3D/video task; run preview again to start a new SAM3 session." in advanced_source
 

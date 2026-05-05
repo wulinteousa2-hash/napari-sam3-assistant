@@ -431,6 +431,7 @@ class AdvancedModePanel(QWidget):
             toggle_next_mode_callback=self._toggle_next_point_mode,
             flip_existing_point_callback=self._flip_existing_point_polarity,
             is_enabled_callback=self._live_refinement_enabled,
+            shortcuts_enabled_callback=self._live_refinement_shortcuts_enabled,
         )
         self._sync_live_refinement_layer()
         self._set_live_refinement_status("Activity: idle")
@@ -564,6 +565,11 @@ class AdvancedModePanel(QWidget):
             and self.prompt_tool_combo.currentData() == PROMPT_POINTS
             and self._worker is None
         )
+
+    def _live_refinement_shortcuts_enabled(self) -> bool:
+        if self.shared_context is not None and self.shared_context.get_mode() != "advanced":
+            return False
+        return self._live_refinement_enabled()
 
     def _toggle_next_point_mode(self) -> None:
         current = self.point_polarity_combo.currentData() or "positive"

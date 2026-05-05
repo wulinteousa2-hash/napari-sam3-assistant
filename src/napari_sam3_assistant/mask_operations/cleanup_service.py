@@ -41,6 +41,32 @@ class MaskCleanupService:
             out[mask] = largest.label_value
         return out
 
+
+    def delete_values(self, data: Any, values: list[int]) -> tuple[np.ndarray, int]:
+        arr = np.asarray(data).copy()
+        if not values:
+            return arr, 0
+        mask = np.isin(arr, np.asarray(values, dtype=arr.dtype))
+        changed = int(np.count_nonzero(mask))
+        arr[mask] = 0
+        return arr, changed
+
+    def keep_values(self, data: Any, values: list[int]) -> tuple[np.ndarray, int]:
+        arr = np.asarray(data).copy()
+        if not values:
+            return arr, 0
+        keep = np.isin(arr, np.asarray(values, dtype=arr.dtype)) | (arr == 0)
+        changed = int(np.count_nonzero(~keep))
+        arr[~keep] = 0
+        return arr, changed
+
+    def convert_nonzero_to_value(self, data: Any, target_value: int) -> tuple[np.ndarray, int]:
+        arr = np.asarray(data).copy()
+        mask = arr != 0
+        changed = int(np.count_nonzero(mask & (arr != int(target_value))))
+        arr[mask] = int(target_value)
+        return arr, changed
+
     def relabel_values(self, data: Any, source_values: list[int], target_value: int) -> tuple[np.ndarray, int]:
         arr = np.asarray(data).copy()
         if not source_values:
