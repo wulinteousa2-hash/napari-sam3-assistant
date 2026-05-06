@@ -7,6 +7,7 @@ from napari_sam3_assistant.core.coordinates import (
     extract_2d_image,
     extract_2d_roi,
     extract_video_frame_image,
+    extract_video_xy_roi,
     globalize_result_arrays,
     infer_image_selection,
     localize_bundle_to_roi,
@@ -107,6 +108,34 @@ def test_extract_video_frame_image_uses_selected_channel_for_channel_first_stack
     assert int(extracted[3, 4]) == 11
 
 
+def test_extract_video_xy_roi_crops_all_frames():
+    data = np.arange(4 * 8 * 9, dtype=np.uint16).reshape(4, 8, 9)
+    selection = infer_image_selection("stack", data.shape, dims_current_step=(2, 0, 0))
+    bounds = RoiBounds(y0=2, x0=3, y1=6, x1=8)
+
+    roi = extract_video_xy_roi(data, selection, bounds)
+
+    assert roi.shape == (4, 4, 5)
+    np.testing.assert_array_equal(roi, data[:, 2:6, 3:8])
+
+
+def test_extract_video_xy_roi_selects_channel_first_axis():
+    data = np.zeros((4, 2, 8, 9), dtype=np.uint8)
+    data[:, 1, 2:6, 3:8] = 17
+    selection = infer_image_selection(
+        "tcxy",
+        data.shape,
+        dims_current_step=(2, 1, 0, 0),
+        channel_axis=1,
+    )
+    bounds = RoiBounds(y0=2, x0=3, y1=6, x1=8)
+
+    roi = extract_video_xy_roi(data, selection, bounds)
+
+    assert roi.shape == (4, 4, 5)
+    assert int(roi.max()) == 17
+
+
 def test_extract_2d_roi_preserves_trailing_singleton_channel():
     data = np.arange(10 * 12, dtype=np.uint16).reshape(10, 12, 1)
     selection = infer_image_selection("ome-zarr", data.shape)
@@ -196,6 +225,24 @@ def test_localize_bundle_to_roi_converts_global_prompts_to_local_coordinates():
     assert local.points[0].x == 15
     assert local.boxes[0].y0 == 8
     assert local.boxes[0].x0 == 10
+
+
+def test_localize_video_bundle_to_roi_preserves_frame_index():
+    selection = infer_image_selection("stack", (4, 100, 120), dims_current_step=(2, 0, 0))
+    bundle = PromptBundle(
+        task=Sam3Task.SEGMENT_3D,
+        image=selection,
+        points=[PointPrompt(y=45, x=55)],
+    )
+    bounds = RoiBounds(y0=32, x0=40, y1=96, x1=104)
+
+    local = localize_bundle_to_roi(bundle, bounds, (4, 64, 64))
+
+    assert local.image.frame_axis == 0
+    assert local.image.frame_index == 2
+    assert local.image.spatial_axes == (1, 2)
+    assert local.points[0].y == 13
+    assert local.points[0].x == 15
 
 
 def test_globalize_result_arrays_writes_roi_labels_to_global_canvas():

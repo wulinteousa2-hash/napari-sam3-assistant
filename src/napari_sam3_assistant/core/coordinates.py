@@ -219,6 +219,26 @@ def extract_2d_roi(
     return sliced
 
 
+def extract_video_xy_roi(
+    data: np.ndarray,
+    selection: ImageSelection,
+    bounds: RoiBounds,
+) -> np.ndarray:
+    """Extract a fixed XY ROI across all video/stack frames."""
+    data = _base_image_data(data)
+    ndim = len(selection.data_shape)
+    index: list[int | slice] = [slice(None)] * ndim
+
+    if selection.channel_axis is not None and selection.channel_axis != ndim - 1:
+        index[selection.channel_axis] = selection.channel_index or 0
+
+    y_axis, x_axis = selection.spatial_axes
+    index[y_axis] = slice(bounds.y0, bounds.y1)
+    index[x_axis] = slice(bounds.x0, bounds.x1)
+
+    return np.asarray(base_image_data(data)[tuple(index)])
+
+
 def base_image_data(data):
     """Return the full-resolution level for napari multiscale image data."""
     if isinstance(data, (list, tuple)):
@@ -332,6 +352,7 @@ def localize_bundle_to_roi(
         data_shape=tuple(int(v) for v in roi_shape),
         channel_axis=channel_axis,
     )
+    local_image = replace(local_image, frame_index=bundle.image.frame_index)
     points = [
         replace(point, y=float(point.y) - bounds.y0, x=float(point.x) - bounds.x0)
         for point in bundle.points

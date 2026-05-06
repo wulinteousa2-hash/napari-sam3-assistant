@@ -116,6 +116,17 @@ class ComponentTableWidget(QTableWidget):
                 ids.append(component_id)
         return ids
 
+
+    def select_component_id(self, component_id: int) -> bool:
+        """Select the row matching a component id, if present."""
+        self.clearSelection()
+        for row in range(self.rowCount()):
+            if self._component_id_for_row(row) == int(component_id):
+                self.selectRow(row)
+                self.scrollToItem(self.item(row, 0))
+                return True
+        return False
+
     def _component_id_for_row(self, row: int) -> int | None:
         item = self.item(row, 0)
         if item is None:

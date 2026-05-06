@@ -4,11 +4,9 @@ from typing import Callable
 
 from qtpy.QtWidgets import QTabWidget, QVBoxLayout, QWidget
 
-from .accepted_objects_tab import AcceptedObjectsTab
 from .class_merge_tab import ClassMergeTab
 from .final_merge_export_tab import FinalMergeExportTab
 from .mask_cleanup_tab import MaskCleanupTab
-from .object_review_tab import ObjectReviewTab
 
 
 class MaskOperationsPanel(QWidget):
@@ -17,16 +15,19 @@ class MaskOperationsPanel(QWidget):
         self.viewer = viewer
         self._log = log_callback or (lambda message: None)
         self.tabs = QTabWidget()
-        self.object_review_tab = ObjectReviewTab(viewer, self._log, self.refresh_all)
-        self.accepted_objects_tab = AcceptedObjectsTab(viewer, self._log, self.refresh_all)
+
+        # Action-first workflow:
+        # 1) clean/relabel objects inside one Labels layer,
+        # 2) merge multiple Labels layers when SAM3 produced separate layers,
+        # 3) export final masks.
         self.mask_cleanup_tab = MaskCleanupTab(viewer, self._log, self.refresh_all)
         self.class_merge_tab = ClassMergeTab(viewer, self._log, self.refresh_all)
         self.final_merge_export_tab = FinalMergeExportTab(viewer, self._log, self.refresh_all)
-        self.tabs.addTab(self.object_review_tab, "Object Review")
-        self.tabs.addTab(self.accepted_objects_tab, "Save Accepted")
+
         self.tabs.addTab(self.mask_cleanup_tab, "Mask Cleanup / Multiclass")
-        self.tabs.addTab(self.class_merge_tab, "Class Merge")
+        self.tabs.addTab(self.class_merge_tab, "Merge Layers")
         self.tabs.addTab(self.final_merge_export_tab, "Final Merge / Export")
+
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.tabs)
@@ -49,8 +50,6 @@ class MaskOperationsPanel(QWidget):
 
     def _all_tabs(self):
         return (
-            self.object_review_tab,
-            self.accepted_objects_tab,
             self.mask_cleanup_tab,
             self.class_merge_tab,
             self.final_merge_export_tab,

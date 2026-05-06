@@ -2,12 +2,36 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.2.5
+
+### Added
+- Added fast canvas-based mask cleanup for SAM3-generated Labels layers.
+- Added an in-memory component index to speed up mouse selection and deletion in large multiclass masks.
+- Added direct canvas cleanup interactions: double-click or left-click to select a clicked mask/component, and right-click to open cleanup actions.
+- Added faster clicked-component deletion without requiring full component re-analysis after every mouse action.
+
+### Changed
+- Simplified Mask Operations into action-first tabs: `Mask Cleanup / Multiclass`, `Merge Layers`, and `Final Merge / Export`.
+- Reframed cleanup around object, value, and component actions inside a selected Labels layer instead of layer-level review states.
+- Removed the Advanced Layer Review tab from the default Mask Operations interface.
+- Reduced Mask Cleanup UI clutter by removing redundant mouse action/button dropdown controls.
+
+### Improved
+- Improved responsiveness for Labels layers containing many SAM3-generated masks.
+- Improved right-click cleanup behavior so the context menu is tied to the clicked mask.
+
+### Fixed
+- Fixed slow interaction with large Labels layers containing many mask components.
+- Fixed confusing mouse cleanup controls that exposed implementation details.
+- Fixed the workflow mismatch where users reviewed layers instead of directly acting on mask components.
+
 ## 4.2.4
 
 ### Added
 - Added expanded Mask Operations workflows for 2D and 3D masks.
 - Added support for binary and multiclass mask cleanup workflows in Mask Operations.
 - Added class-aware mask handling so users can clean and manage multiclass segmentation outputs more directly.
+- Added fixed XY local ROI inference for `3D/video propagation`, including SAM3.1 multiplex, so large stacks can run video propagation on a cropped region and write results back into full-frame coordinates.
 
 ### Changed
 - Updated the Mask Operations UI to better support accepted objects, class conversion, component review, and cleanup workflows.

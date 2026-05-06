@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Callable
 
 import numpy as np
+from qtpy.QtCore import QPoint
+from qtpy.QtGui import QCursor
 from qtpy.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -11,6 +13,7 @@ from qtpy.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QSpinBox,
@@ -22,6 +25,7 @@ from qtpy.QtWidgets import (
 
 from .cleanup_service import MaskCleanupService
 from .component_analysis_service import ComponentAnalysisService
+from .fast_component_index_service import FastComponentIndex, FastComponentIndexService
 from .component_table_widget import ComponentTableWidget
 from .utils import labels_layer_names, safe_get_layer
 
@@ -38,9 +42,11 @@ class MaskCleanupTab(QWidget):
         self._log = log_callback
         self._refresh_all = refresh_callback
         self.analysis = ComponentAnalysisService()
+        self.fast_index_builder = FastComponentIndexService()
         self.cleanup = MaskCleanupService()
         self._mouse_layer = None
-        self._mouse_callback = self._delete_label_on_right_click
+        self._mouse_callback = self._handle_mouse_action
+        self._mouse_double_click_callback = self._handle_mouse_double_click
         self._undo_history: dict[int, list[np.ndarray]] = {}
         self._last_layer_data: dict[int, np.ndarray] = {}
         self._tracked_layer = None
@@ -48,6 +54,9 @@ class MaskCleanupTab(QWidget):
         self._suppress_history_event = False
         self._last_analysis_indexer: object = Ellipsis
         self._last_analysis_offset: tuple[int, ...] | None = None
+        self._fast_index: FastComponentIndex | None = None
+        self._fast_index_layer_id: int | None = None
+        self._fast_index_scope_key: tuple | None = None
         self._build_ui()
         self.refresh()
 
@@ -62,7 +71,7 @@ class MaskCleanupTab(QWidget):
         self._sync_scope_controls()
         self.refresh_unique_values()
         self._track_target_layer()
-        self._sync_mouse_delete_callback()
+        self._sync_mouse_action_callback()
 
     def analyze_layer(self) -> None:
         layer = self._target_layer()
@@ -70,12 +79,16 @@ class MaskCleanupTab(QWidget):
             self._log("Select a target Labels layer for component analysis.")
             return
         sub, indexer, offset = self._scoped_data(layer)
-        records = self.analysis.analyze(sub)
+        self._fast_index = self.fast_index_builder.build(sub)
+        self._fast_index_layer_id = id(layer)
+        self._fast_index_scope_key = self._scope_key(layer, indexer)
         self._last_analysis_indexer = indexer
         self._last_analysis_offset = offset
+        records = self._fast_index.active_records()
         self.component_table.set_records(records)
         scope = self._scope_label(layer)
-        self._log(f"Analyzed {len(records)} connected component(s) in {layer.name} ({scope}).")
+        self.status_label.setText(f"Fast index ready: {len(records)} component(s) indexed in {scope}.")
+        self._log(f"Built fast click index for {len(records)} connected component(s) in {layer.name} ({scope}).")
 
     def delete_selected_components(self) -> None:
         layer = self._target_layer()
@@ -83,18 +96,13 @@ class MaskCleanupTab(QWidget):
         if layer is None or not ids:
             self._log("Select component rows to delete.")
             return
-        masks = self.analysis.component_masks(ids)
         sub, indexer, _offset = self._scoped_data(layer)
-        try:
-            cleaned = self.cleanup.delete_components(sub, masks)
-        except ValueError as exc:
-            self._log(str(exc) + " Re-run Analyze Layer after changing scope or target layer.")
-            return
-        if self._replace_scoped_layer_data(layer, cleaned, indexer, "delete selected components"):
-            self._log(f"Deleted {len(masks)} selected component(s) from {layer.name}.")
-            self.analyze_layer()
+        fast_index = self._ensure_fast_index(layer, sub, indexer)
+        cleaned, changed = fast_index.delete_components(sub, ids)
+        if changed and self._replace_scoped_layer_data(layer, cleaned, indexer, "delete selected components", invalidate_fast_index=False):
+            self.component_table.set_records(fast_index.active_records())
             self.refresh_unique_values()
-            self._refresh_all()
+            self._log(f"Deleted {len(ids)} selected component(s) from {layer.name} ({changed} pixel(s)/voxel(s)).")
         else:
             self._log("Selected component delete made no mask changes.")
 
@@ -219,70 +227,268 @@ class MaskCleanupTab(QWidget):
             self.unique_values_table.setItem(row, 0, QTableWidgetItem(str(int(value))))
             self.unique_values_table.setItem(row, 1, QTableWidgetItem(str(int(count))))
 
-    def _sync_mouse_delete_callback(self) -> None:
-        self._disconnect_mouse_delete_callback()
-        if not getattr(self, "right_click_delete_check", None):
+    def _sync_mouse_action_callback(self) -> None:
+        self._disconnect_mouse_action_callback()
+        if not getattr(self, "mouse_action_enable_check", None):
             return
-        if not self.right_click_delete_check.isChecked():
+        if not self.mouse_action_enable_check.isChecked():
             return
         layer = self._target_layer()
         if layer is None:
             return
-        callbacks = getattr(layer, "mouse_drag_callbacks", None)
-        if callbacks is None:
+
+        installed = False
+        drag_callbacks = getattr(layer, "mouse_drag_callbacks", None)
+        if drag_callbacks is not None:
+            if self._mouse_callback not in drag_callbacks:
+                drag_callbacks.append(self._mouse_callback)
+            installed = True
+
+        double_click_callbacks = getattr(layer, "mouse_double_click_callbacks", None)
+        if double_click_callbacks is not None:
+            if self._mouse_double_click_callback not in double_click_callbacks:
+                double_click_callbacks.append(self._mouse_double_click_callback)
+            installed = True
+
+        if not installed:
             self._log("Selected Labels layer does not expose mouse callbacks.")
             return
-        if self._mouse_callback not in callbacks:
-            callbacks.append(self._mouse_callback)
+
         self._mouse_layer = layer
         try:
             self.viewer.layers.selection.active = layer
             layer.mode = "pick"
         except Exception:
             pass
-        self._log(f"Right-click delete armed for '{layer.name}'.")
+        self.status_label.setText(
+            "Mouse ready: double-click a mask to select its table row; right-click a mask for actions."
+        )
 
-    def _disconnect_mouse_delete_callback(self) -> None:
+    def _disconnect_mouse_action_callback(self) -> None:
         layer = self._mouse_layer
         if layer is None:
             return
-        callbacks = getattr(layer, "mouse_drag_callbacks", None)
-        if callbacks is not None and self._mouse_callback in callbacks:
-            callbacks.remove(self._mouse_callback)
+        drag_callbacks = getattr(layer, "mouse_drag_callbacks", None)
+        if drag_callbacks is not None and self._mouse_callback in drag_callbacks:
+            drag_callbacks.remove(self._mouse_callback)
+        double_click_callbacks = getattr(layer, "mouse_double_click_callbacks", None)
+        if double_click_callbacks is not None and self._mouse_double_click_callback in double_click_callbacks:
+            double_click_callbacks.remove(self._mouse_double_click_callback)
         self._mouse_layer = None
 
-    def _delete_label_on_right_click(self, layer, event):
-        if not self.right_click_delete_check.isChecked():
+    def _handle_mouse_double_click(self, layer, event):
+        if not self._mouse_enabled_for_layer(layer):
             return
-        if layer is not self._target_layer():
+        self._pick_clicked_mask(layer, event, source="double-click")
+
+    def _handle_mouse_action(self, layer, event):
+        if not self._mouse_enabled_for_layer(layer):
             return
-        if not self._is_right_click(event):
+
+        event_type = str(getattr(event, "type", "")).lower()
+        if "double" in event_type:
+            self._pick_clicked_mask(layer, event, source="double-click")
             return
-        label_value = self._label_value_at_event(layer, event)
+
+        if self._is_right_mouse_event(event):
+            self._open_canvas_context_menu(layer, event)
+            return
+
+        # Fixed, frictionless canvas behavior:
+        # - double-click: select clicked mask/component row
+        # - right-click: context menu for cleanup actions
+        # - left-click/other click: select clicked mask/component row
+        # No user-facing mouse-action or mouse-button dropdowns are needed.
+        self._pick_clicked_mask(layer, event, source="click")
+
+    def _mouse_enabled_for_layer(self, layer) -> bool:
+        return (
+            getattr(self, "mouse_action_enable_check", None) is not None
+            and self.mouse_action_enable_check.isChecked()
+            and layer is self._target_layer()
+        )
+
+    def _pick_clicked_mask(self, layer, event, *, source: str = "click") -> tuple[int, int | None] | None:
+        coords = self._event_data_coords(layer, event)
+        if coords is None:
+            return None
+        label_value = self._label_value_at_coords(layer, coords)
         if label_value <= 0:
-            self._log("Right-clicked background; no label removed.")
-            return
+            self.status_label.setText("Clicked background; no mask selected.")
+            return None
         sub, indexer, _offset = self._scoped_data(layer)
-        data, removed = self.cleanup.delete_values(sub, [label_value])
-        if removed == 0:
+        scoped_coords = self._coords_to_scoped_coords(layer, coords, indexer)
+        if scoped_coords is None:
+            self.status_label.setText("Clicked mask is outside the selected operation scope.")
+            return None
+
+        fast_index = self._ensure_fast_index(layer, sub, indexer)
+        component_id = fast_index.component_id_at(scoped_coords)
+        self._select_value_row(label_value)
+        if component_id is not None:
+            self.component_table.select_component_id(component_id)
+        self.status_label.setText(
+            f"Selected value {label_value}" + (f", component {component_id}" if component_id else "")
+        )
+        self._log(
+            f"{source.capitalize()} selected label value {label_value}"
+            + (f", component {component_id}" if component_id else "")
+            + f" in {layer.name}."
+        )
+        return label_value, component_id
+
+    def _open_canvas_context_menu(self, layer, event) -> None:
+        picked = self._pick_clicked_mask(layer, event, source="right-click")
+        if picked is None:
             return
-        if self._replace_scoped_layer_data(layer, data, indexer, "right-click delete"):
-            self._log(
-                f"Removed label value {label_value} from '{layer.name}' in {self._scope_label(layer)} "
-                f"({removed} pixel(s)/voxel(s))."
+        label_value, component_id = picked
+        menu = QMenu(self)
+        delete_component_action = menu.addAction("Delete clicked mask component")
+        delete_value_action = menu.addAction(f"Delete all pixels/voxels with value {label_value}")
+        menu.addSeparator()
+        locate_action = menu.addAction("Select table row only")
+        selected_action = menu.exec_(self._event_global_position(event))
+        if selected_action == delete_component_action:
+            self._apply_mouse_action(layer, event, "delete_component")
+        elif selected_action == delete_value_action:
+            self._apply_mouse_action(layer, event, "delete_value")
+        elif selected_action == locate_action and component_id is not None:
+            self.component_table.select_component_id(component_id)
+
+    def _apply_mouse_action(self, layer, event, action: str) -> None:
+        coords = self._event_data_coords(layer, event)
+        if coords is None:
+            return
+        label_value = self._label_value_at_coords(layer, coords)
+        if label_value <= 0:
+            self._log("Clicked background; no mask action applied.")
+            return
+
+        sub, indexer, _offset = self._scoped_data(layer)
+        scoped_coords = self._coords_to_scoped_coords(layer, coords, indexer)
+        if scoped_coords is None:
+            self._log("Clicked mask is outside the selected operation scope.")
+            return
+
+        if action == "pick":
+            self._pick_clicked_mask(layer, event, source="click")
+            return
+
+        fast_index = self._ensure_fast_index(layer, sub, indexer)
+        component_id = fast_index.component_id_at(scoped_coords)
+        invalidate_fast_index = False
+
+        if action == "delete_value":
+            data, changed = fast_index.delete_label_value(sub, label_value)
+            message = f"Deleted clicked value {label_value}"
+        elif action == "delete_component":
+            if component_id is None:
+                self._log("Clicked mask component is not indexed. Click Analyze Layer / Rebuild Index and try again.")
+                return
+            data, changed = fast_index.delete_components(sub, [component_id])
+            message = f"Deleted clicked component {component_id} from value {label_value}"
+        elif action == "keep_value_only":
+            data, changed = self.cleanup.keep_values(sub, [label_value])
+            invalidate_fast_index = True
+            message = f"Kept clicked value {label_value} only"
+        else:
+            return
+
+        if changed and self._replace_scoped_layer_data(
+            layer,
+            data,
+            indexer,
+            action.replace("_", " "),
+            invalidate_fast_index=invalidate_fast_index,
+        ):
+            self._log(f"{message} in {layer.name} ({self._scope_label(layer)}; {changed} pixel(s)/voxel(s)).")
+            if invalidate_fast_index:
+                self.analyze_layer()
+            else:
+                self.component_table.set_records(fast_index.active_records())
+                self.refresh_unique_values()
+                self._select_value_row(label_value)
+        else:
+            self._log(f"{message} made no mask changes.")
+
+    def _ensure_fast_index(self, layer, sub: np.ndarray, indexer: object) -> FastComponentIndex:
+        scope_key = self._scope_key(layer, indexer)
+        if (
+            self._fast_index is None
+            or self._fast_index_layer_id != id(layer)
+            or self._fast_index_scope_key != scope_key
+            or self._fast_index.shape != tuple(sub.shape)
+        ):
+            self._fast_index = self.fast_index_builder.build(sub)
+            self._fast_index_layer_id = id(layer)
+            self._fast_index_scope_key = scope_key
+            self._last_analysis_indexer = indexer
+            self.component_table.set_records(self._fast_index.active_records())
+            self.status_label.setText(
+                f"Fast index ready: {len(self._fast_index.active_records())} component(s) indexed."
             )
-            self.analyze_layer()
-            self.refresh_unique_values()
-            self._refresh_all()
+        return self._fast_index
 
-    def _is_right_click(self, event) -> bool:
+    def _invalidate_fast_index(self) -> None:
+        self._fast_index = None
+        self._fast_index_layer_id = None
+        self._fast_index_scope_key = None
+
+    def _scope_key(self, layer, indexer: object) -> tuple:
+        if indexer is Ellipsis:
+            indexer_key = "all"
+        elif isinstance(indexer, tuple):
+            indexer_key = tuple(
+                ("slice", selector.start, selector.stop, selector.step)
+                if isinstance(selector, slice)
+                else ("int", int(selector))
+                if isinstance(selector, int)
+                else ("other", repr(selector))
+                for selector in indexer
+            )
+        else:
+            indexer_key = repr(indexer)
+        data = np.asarray(layer.data)
+        return (id(layer), layer.name, tuple(data.shape), str(data.dtype), indexer_key)
+
+    def _event_global_position(self, event):
+        """Return a reliable global Qt position for a napari canvas mouse event."""
+        native = getattr(event, "native", None)
+        canvas = getattr(getattr(self.viewer, "window", None), "qt_viewer", None)
+        canvas = getattr(canvas, "canvas", None)
+        widget = getattr(canvas, "native", None)
+        if native is not None and widget is not None:
+            for attr in ("position", "pos"):
+                try:
+                    pos = getattr(native, attr)()
+                    if hasattr(pos, "toPoint"):
+                        pos = pos.toPoint()
+                    elif not isinstance(pos, QPoint):
+                        pos = QPoint(int(pos.x()), int(pos.y()))
+                    return widget.mapToGlobal(pos)
+                except Exception:
+                    pass
+        return QCursor.pos()
+
+    def _is_left_mouse_event(self, event) -> bool:
+        return self._normalized_mouse_button(event) in {"1", "left", "leftbutton", "mousebutton.left", "mousebutton.left_button"}
+
+    def _is_right_mouse_event(self, event) -> bool:
+        return self._normalized_mouse_button(event) in {"2", "right", "rightbutton", "mousebutton.right", "mousebutton.right_button"}
+
+    def _normalized_mouse_button(self, event) -> str:
         button = getattr(event, "button", None)
-        return button in {2, "right", "Right", "right_button"}
+        if button is None:
+            return ""
+        name = getattr(button, "name", None)
+        if name:
+            return str(name).lower().replace("_", "")
+        return str(button).lower().replace(" ", "").replace("_", "")
 
-    def _label_value_at_event(self, layer, event) -> int:
+    def _event_data_coords(self, layer, event) -> tuple[int, ...] | None:
         position = getattr(event, "position", None)
         if position is None:
-            return 0
+            return None
         try:
             data_position = layer.world_to_data(position)
         except Exception:
@@ -290,11 +496,62 @@ class MaskCleanupTab(QWidget):
         data = np.asarray(layer.data)
         coords = tuple(int(round(float(value))) for value in data_position[-data.ndim :])
         if len(coords) != data.ndim:
+            return None
+        for coord, size in zip(coords, data.shape, strict=False):
+            if coord < 0 or coord >= size:
+                return None
+        return coords
+
+    def _label_value_at_coords(self, layer, coords: tuple[int, ...]) -> int:
+        data = np.asarray(layer.data)
+        if len(coords) != data.ndim:
             return 0
         for coord, size in zip(coords, data.shape, strict=False):
             if coord < 0 or coord >= size:
                 return 0
         return int(data[coords])
+
+    def _coords_to_scoped_coords(self, layer, coords: tuple[int, ...], indexer: object) -> tuple[int, ...] | None:
+        data = np.asarray(layer.data)
+        if indexer is Ellipsis:
+            return coords
+        if not isinstance(indexer, tuple):
+            return coords
+        scoped: list[int] = []
+        for axis, selector in enumerate(indexer):
+            coord = coords[axis]
+            if isinstance(selector, slice):
+                start = 0 if selector.start is None else int(selector.start)
+                stop = data.shape[axis] if selector.stop is None else int(selector.stop)
+                if coord < start or coord >= stop:
+                    return None
+                scoped.append(coord - start)
+            elif isinstance(selector, int):
+                if coord != selector:
+                    return None
+            else:
+                scoped.append(coord)
+        return tuple(scoped)
+
+    def _select_value_row(self, label_value: int) -> bool:
+        self.unique_values_table.clearSelection()
+        for row in range(self.unique_values_table.rowCount()):
+            item = self.unique_values_table.item(row, 0)
+            if item is not None and int(item.text()) == int(label_value):
+                self.unique_values_table.selectRow(row)
+                self.unique_values_table.scrollToItem(item)
+                return True
+        return False
+
+    def _select_component_row_at_scoped_coord(self, sub: np.ndarray, scoped_coords: tuple[int, ...]) -> int | None:
+        layer = self._target_layer()
+        if layer is None:
+            return None
+        fast_index = self._ensure_fast_index(layer, sub, self._last_analysis_indexer)
+        component_id = fast_index.component_id_at(scoped_coords)
+        if component_id is not None:
+            self.component_table.select_component_id(component_id)
+        return component_id
 
     def _build_ui(self) -> None:
         root = QVBoxLayout()
@@ -325,17 +582,18 @@ class MaskCleanupTab(QWidget):
         self.undo_btn.setToolTip("Restore the selected Labels layer to its previous Mask Cleanup state.")
         self.undo_btn.clicked.connect(self.undo_last_edit)
         self.undo_btn.setEnabled(False)
-        self.right_click_delete_check = QCheckBox("Right-click Delete")
-        self.right_click_delete_check.setToolTip(
-            "Right-click a label object in the selected target Labels layer to remove that label value within the selected scope."
+        self.mouse_action_enable_check = QCheckBox("Enable canvas right-click/double-click tools")
+        self.mouse_action_enable_check.setToolTip(
+            "Double-click a mask to select the matching component row. Right-click a mask to open a delete menu."
         )
-        self.right_click_delete_check.toggled.connect(lambda _checked: self._sync_mouse_delete_callback())
+        self.mouse_action_enable_check.setChecked(True)
+        self.mouse_action_enable_check.toggled.connect(lambda _checked: self._sync_mouse_action_callback())
         target_row = QHBoxLayout()
         target_row.addWidget(refresh_btn)
         target_row.addWidget(analyze_btn)
         target_row.addWidget(delete_btn)
         target_row.addWidget(self.undo_btn)
-        target_row.addWidget(self.right_click_delete_check)
+        target_row.addWidget(self.mouse_action_enable_check)
         target_form.addRow("Target labels layer", self.target_combo)
         target_form.addRow("Operation scope", self.scope_combo)
         target_form.addRow("Z range", z_row)
@@ -404,6 +662,8 @@ class MaskCleanupTab(QWidget):
             """
         )
         root.addWidget(self.unique_values_table)
+        self.status_label = QLabel("Mouse ready: double-click a mask to select its table row; right-click for delete actions.")
+        root.addWidget(self.status_label)
         relabel_form = QFormLayout()
         self.values_to_replace_edit = QLineEdit()
         self.values_to_replace_edit.setPlaceholderText("1,2,3,4")
@@ -460,13 +720,15 @@ class MaskCleanupTab(QWidget):
         return safe_get_layer(self.viewer, self.target_combo.currentData())
 
     def _on_target_layer_changed(self, _index: int) -> None:
+        self._invalidate_fast_index()
         self._sync_scope_controls()
         self.refresh_unique_values()
         self._track_target_layer()
-        self._sync_mouse_delete_callback()
+        self._sync_mouse_action_callback()
         self._update_undo_state()
 
     def _on_scope_changed(self, _index: int) -> None:
+        self._invalidate_fast_index()
         self._sync_scope_controls()
         self.refresh_unique_values()
 
@@ -517,14 +779,22 @@ class MaskCleanupTab(QWidget):
         offset[z_axis] = z0
         return arr[tuple(indexer)].copy(), tuple(indexer), tuple(offset)
 
-    def _replace_scoped_layer_data(self, layer, scoped_data: np.ndarray, indexer: object, action: str) -> bool:
+    def _replace_scoped_layer_data(
+        self,
+        layer,
+        scoped_data: np.ndarray,
+        indexer: object,
+        action: str,
+        *,
+        invalidate_fast_index: bool = True,
+    ) -> bool:
         current = np.asarray(layer.data)
         if indexer is Ellipsis:
             updated = np.asarray(scoped_data)
         else:
             updated = current.copy()
             updated[indexer] = scoped_data
-        return self._replace_layer_data(layer, updated, action)
+        return self._replace_layer_data(layer, updated, action, invalidate_fast_index=invalidate_fast_index)
 
     def _current_z(self, arr: np.ndarray, z_axis: int) -> int:
         dims = getattr(self.viewer, "dims", None)
@@ -575,13 +845,14 @@ class MaskCleanupTab(QWidget):
             self._last_layer_data[id(layer)] = np.asarray(layer.data).copy()
         finally:
             self._suppress_history_event = False
+        self._invalidate_fast_index()
         self._log(f"Undid last Mask Cleanup edit on {layer.name}.")
         self.analyze_layer()
         self.refresh_unique_values()
         self._refresh_all()
         self._update_undo_state()
 
-    def _replace_layer_data(self, layer, data, action: str) -> bool:
+    def _replace_layer_data(self, layer, data, action: str, *, invalidate_fast_index: bool = True) -> bool:
         current = np.asarray(layer.data)
         updated = np.asarray(data)
         if current.shape == updated.shape and np.array_equal(current, updated):
@@ -595,6 +866,8 @@ class MaskCleanupTab(QWidget):
         finally:
             self._suppress_history_event = False
         self._update_undo_state()
+        if invalidate_fast_index:
+            self._invalidate_fast_index()
         return True
 
     def _push_undo_state(self, layer, action: str) -> None:
@@ -666,18 +939,26 @@ class MaskCleanupTab(QWidget):
             return
         self._append_undo_state(layer, previous, "manual label edit")
         self._last_layer_data[layer_id] = current
+        self._invalidate_fast_index()
 
     def locate_component(self, component_id: int) -> None:
         layer = self._target_layer()
-        mask = self.analysis.component_mask(component_id)
-        if layer is None or mask is None:
-            self._log("Analyze a target Labels layer before locating a component.")
+        if layer is None:
+            self._log("Select a target Labels layer before locating a component.")
+            return
+        sub, indexer, _offset = self._scoped_data(layer)
+        fast_index = self._ensure_fast_index(layer, sub, indexer)
+        mask = fast_index.component_mask(component_id)
+        record = fast_index.record(component_id)
+        if mask is None or record is None:
+            self._log("Analyze/Rebuild the fast index before locating this component.")
             return
         coords = np.argwhere(mask)
         if coords.size == 0:
             self._log(f"Component {component_id} is empty or no longer exists.")
             return
-        data_position = coords.mean(axis=0)
+        bbox_start = np.asarray([lo for lo, _hi in record.bbox], dtype=float)
+        data_position = coords.mean(axis=0) + bbox_start
         if self._last_analysis_offset is not None and len(self._last_analysis_offset) == len(data_position):
             data_position = data_position + np.asarray(self._last_analysis_offset, dtype=float)
         label_value = self._label_value_near(layer, data_position)
