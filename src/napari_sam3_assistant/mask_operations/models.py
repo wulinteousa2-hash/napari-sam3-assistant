@@ -51,6 +51,29 @@ class ComponentRecord:
         return f"{self.z_min}:{self.z_max}"
 
 
+@dataclass
+class CandidateObjectRecord:
+    candidate_id: int
+    source_layer_name: str
+    source_label_value: int
+    source_component_id: int
+    area: int
+    bbox: tuple[tuple[int, int], ...]
+    centroid: tuple[float, ...]
+    status: str = "keep"
+    duplicate_of: int | None = None
+    parent_candidate_id: int | None = None
+    child_count: int = 0
+    max_iou: float = 0.0
+    max_containment: float = 0.0
+    overlap_pixels: int = 0
+    output_object_id: int | None = None
+
+    @property
+    def bbox_text(self) -> str:
+        return ", ".join(f"{lo}:{hi}" for lo, hi in self.bbox)
+
+
 @dataclass(frozen=True)
 class MergeOptions:
     mode: str = "semantic"

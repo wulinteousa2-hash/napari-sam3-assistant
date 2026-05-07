@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
@@ -95,6 +95,29 @@ class FastComponentIndex:
             if int(record.label_value) == int(label_value):
                 self.deleted_component_ids.add(component_id)
         self.component_id_map[mask] = 0
+        return out, changed
+
+    def relabel_components(
+        self,
+        scoped_data: np.ndarray,
+        component_ids: list[int],
+        new_label_value: int,
+    ) -> tuple[np.ndarray, int]:
+        out = np.asarray(scoped_data).copy()
+        changed = 0
+        new_value = int(new_label_value)
+        for component_id in [int(value) for value in component_ids]:
+            record = self.record(component_id)
+            if record is None:
+                continue
+            slices = self._bbox_slices(record.bbox)
+            mask = self.component_id_map[slices] == component_id
+            count = int(np.count_nonzero(mask))
+            if count == 0:
+                continue
+            out[slices][mask] = new_value
+            self.records[component_id] = replace(record, label_value=new_value)
+            changed += count
         return out, changed
 
     def _bbox_slices(self, bbox: tuple[tuple[int, int], ...]) -> tuple[slice, ...]:

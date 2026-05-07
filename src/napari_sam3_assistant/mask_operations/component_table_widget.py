@@ -27,10 +27,12 @@ class ComponentTableWidget(QTableWidget):
     def __init__(
         self,
         delete_callback: Callable[[], None] | None = None,
+        assign_callback: Callable[[], None] | None = None,
         locate_callback: Callable[[int], None] | None = None,
     ) -> None:
         super().__init__(0, 9)
         self._delete_callback = delete_callback
+        self._assign_callback = assign_callback
         self._locate_callback = locate_callback
         self.setObjectName("componentAnalysisTable")
         self.setHorizontalHeaderLabels(
@@ -160,11 +162,21 @@ class ComponentTableWidget(QTableWidget):
         self.setItem(row, column, item)
 
     def _open_context_menu(self, position) -> None:
-        if self._delete_callback is None or not self.selected_component_ids():
+        if not self.selected_component_ids():
             return
         menu = QMenu(self)
-        action = menu.addAction("Delete Selected Components")
-        if menu.exec_(self.viewport().mapToGlobal(position)) == action:
+        assign_action = None
+        delete_action = None
+        if self._assign_callback is not None:
+            assign_action = menu.addAction("Assign Selected To Current Value")
+            assign_action.setToolTip("Relabel selected connected components to the current assignment value.")
+        if self._delete_callback is not None:
+            delete_action = menu.addAction("Delete Selected Components")
+            delete_action.setToolTip("Set selected connected components to background.")
+        selected = menu.exec_(self.viewport().mapToGlobal(position))
+        if selected == assign_action and self._assign_callback is not None:
+            self._assign_callback()
+        elif selected == delete_action and self._delete_callback is not None:
             self._delete_callback()
 
     def _locate_item(self, item: QTableWidgetItem) -> None:

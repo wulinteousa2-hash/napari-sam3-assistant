@@ -17,22 +17,18 @@ The plugin focuses on task-based segmentation workflows:
 
 
 
-## What's New in 4.2.3 SAM3 video diagnostics and performance logging
+## What's New in 4.2.6
 
-Version 4.2.3 adds an opt-in diagnostic mode for SAM3.1 video and 3D propagation performance troubleshooting.
-![Activate SAM3 diagnostics option](docs/activate%20diagnostic%20option.png)
+Version 4.2.6 focuses on faster downstream mask operations for users who generate many SAM3 mask layers on the same image.
 
-- Added a `Log SAM3.1 diagnostics` checkbox in `Advanced > Step 2. Task Setup > Advanced`.
-- When enabled, the plugin records detailed SAM3 video timing and runtime diagnostics during model loading, session startup, prompt insertion, propagation, and napari label writing.
-- The diagnostic mode is intended for comparing SAM3.1 multiplex performance across machines, CUDA/PyTorch builds, and plugin execution paths.
-- The option is off by default so normal users are not exposed to extra debug logging during routine segmentation.
-
-
-## What's New in 4.2.2 Optional completion chime for long runs
-
-SAM3 Assistant can play a short, soft completion chime when a long-running task finishes.
-This is useful when preview or 3D/video propagation takes more than one minute and the user is working away from the screen.
-The chime is optional and can be turned on or off from the plugin UI. On Windows, SAM3 Assistant uses the native winsound backend first for more reliable playback, while Linux and macOS keep the standard plugin sound path with a fallback beep if needed.
+- Added a new `Mask Isolation` tab between `Mask Cleanup / Multiclass` and `Merge Layers`.
+- Added candidate consolidation for many aligned SAM3 mask layers: harvest masks, split connected components, assign global candidate IDs, classify duplicates/parents/children/fragments, and create one clean isolated objects layer.
+- Added fast SciPy-based mask harvesting with a visible progress bar so large mask sets no longer look frozen during processing.
+- Added output metadata that records source layers, candidate provenance, included statuses, thresholds, and candidate-to-output ID mapping.
+- Added clearer Mask Operations tooltips and tab descriptions so users know which actions affect the final isolated layer.
+- Added opt-in table right-click actions in `Mask Isolation` for keep, reject, duplicate, parent, child, fragment, locate, and isolate selected candidates.
+- Added quick class assignment tools in `Mask Cleanup / Multiclass` so users can assign final isolated objects to class values `1` through `6` from the table or canvas.
+- Changed canvas cleanup delete actions to be explicit and opt-in, while keeping canvas assignment tools separate from delete tools.
 
 
 ## What's New in 4.2.0

@@ -2,6 +2,31 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.2.6
+
+### Added
+- Added a new `Mask Isolation` tab to Mask Operations between `Mask Cleanup / Multiclass` and `Merge Layers`.
+- Added candidate consolidation for aligned SAM3 mask layers, including global candidate IDs, source provenance, duplicate detection, nested parent/child detection, fragment detection, and clean isolated output object IDs.
+- Added a sortable candidate table with status, source layer, source label, component ID, area, parent/child counts, overlap metrics, and bbox metadata.
+- Added visible harvest progress reporting for Mask Isolation so users can see which layer and label value is being processed.
+- Added optional parent-only and child-only helper layer creation from classified candidates.
+- Added concise tooltips for Mask Isolation controls, candidate statuses, context menus, and Mask Operations tabs.
+- Added opt-in table right-click actions in Mask Isolation for keep, reject, duplicate, parent, child, fragment, locate, and isolate selected candidates.
+- Added quick class assignment tools in `Mask Cleanup / Multiclass`, including assignment value `1` through `6`, table-row assignment, and canvas right-click assignment.
+- Added focused tests for candidate consolidation and connected-component class assignment.
+
+### Changed
+- Optimized Mask Isolation harvesting with SciPy connected-component labeling and bbox-local candidate mask storage instead of full-image masks per candidate.
+- Made Mask Cleanup canvas delete tools explicit and opt-in instead of enabled by default.
+- Kept Mask Isolation canvas/table actions non-destructive: they change candidate status or create helper layers, but do not edit source mask pixels.
+- Added `scipy` as a direct project dependency because Mask Isolation now uses SciPy for fast component harvesting.
+
+### Fixed
+- Fixed duplicate SAM3 label values across different source layers colliding during downstream consolidation by using global candidate IDs.
+- Fixed uploaded mask-like image layers being invisible to Mask Isolation when they are not native napari `Labels` layers.
+- Fixed confusing silent refresh behavior by showing refresh and harvest status directly in the Mask Isolation tab.
+- Fixed slow harvest behavior that could make napari appear frozen on multi-layer SAM3 mask sets.
+
 ## 4.2.5
 
 ### Added

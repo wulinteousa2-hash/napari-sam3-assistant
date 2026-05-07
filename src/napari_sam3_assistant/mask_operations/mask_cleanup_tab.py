@@ -106,6 +106,32 @@ class MaskCleanupTab(QWidget):
         else:
             self._log("Selected component delete made no mask changes.")
 
+    def assign_selected_components_to_current_value(self) -> None:
+        layer = self._target_layer()
+        ids = self.component_table.selected_component_ids()
+        if layer is None or not ids:
+            self._log("Select component rows to assign.")
+            return
+        new_value = int(self.assignment_value_spin.value())
+        sub, indexer, _offset = self._scoped_data(layer)
+        fast_index = self._ensure_fast_index(layer, sub, indexer)
+        data, changed = fast_index.relabel_components(sub, ids, new_value)
+        if changed and self._replace_scoped_layer_data(layer, data, indexer, "assign selected components", invalidate_fast_index=False):
+            self.component_table.set_records(fast_index.active_records())
+            self.refresh_unique_values()
+            self._select_value_row(new_value)
+            self._log(
+                f"Assigned {len(ids)} selected component(s) to value {new_value} in {layer.name} "
+                f"({changed} pixel(s)/voxel(s))."
+            )
+            self._refresh_all()
+        else:
+            self._log("Selected component assignment made no mask changes.")
+
+    def set_assignment_value(self, value: int) -> None:
+        self.assignment_value_spin.setValue(int(value))
+        self.status_label.setText(f"Assignment value set to {int(value)}.")
+
     def remove_small_objects(self) -> None:
         self._apply_scoped_cleanup(
             lambda sub: self.cleanup.remove_small_objects(sub, self.min_size_spin.value()),
@@ -231,7 +257,8 @@ class MaskCleanupTab(QWidget):
         self._disconnect_mouse_action_callback()
         if not getattr(self, "mouse_action_enable_check", None):
             return
-        if not self.mouse_action_enable_check.isChecked():
+        if not self._any_canvas_tool_enabled():
+            self.status_label.setText("Canvas assignment/delete tools are off.")
             return
         layer = self._target_layer()
         if layer is None:
@@ -260,9 +287,7 @@ class MaskCleanupTab(QWidget):
             layer.mode = "pick"
         except Exception:
             pass
-        self.status_label.setText(
-            "Mouse ready: double-click a mask to select its table row; right-click a mask for actions."
-        )
+        self.status_label.setText("Canvas tools ready: click to select, right-click for enabled actions.")
 
     def _disconnect_mouse_action_callback(self) -> None:
         layer = self._mouse_layer
@@ -302,11 +327,18 @@ class MaskCleanupTab(QWidget):
         self._pick_clicked_mask(layer, event, source="click")
 
     def _mouse_enabled_for_layer(self, layer) -> bool:
-        return (
+        return self._any_canvas_tool_enabled() and layer is self._target_layer()
+
+    def _any_canvas_tool_enabled(self) -> bool:
+        delete_enabled = bool(
             getattr(self, "mouse_action_enable_check", None) is not None
             and self.mouse_action_enable_check.isChecked()
-            and layer is self._target_layer()
         )
+        assign_enabled = bool(
+            getattr(self, "canvas_assign_enable_check", None) is not None
+            and self.canvas_assign_enable_check.isChecked()
+        )
+        return delete_enabled or assign_enabled
 
     def _pick_clicked_mask(self, layer, event, *, source: str = "click") -> tuple[int, int | None] | None:
         coords = self._event_data_coords(layer, event)
@@ -343,12 +375,35 @@ class MaskCleanupTab(QWidget):
             return
         label_value, component_id = picked
         menu = QMenu(self)
-        delete_component_action = menu.addAction("Delete clicked mask component")
-        delete_value_action = menu.addAction(f"Delete all pixels/voxels with value {label_value}")
+        assign_current_action = None
+        quick_assign_actions = {}
+        if self.canvas_assign_enable_check.isChecked():
+            current_value = int(self.assignment_value_spin.value())
+            assign_current_action = menu.addAction(f"Assign clicked object to {current_value}")
+            assign_current_action.setToolTip("Relabel only the clicked connected component.")
+            quick_menu = menu.addMenu("Assign clicked object to")
+            for value in range(1, 7):
+                action = quick_menu.addAction(str(value))
+                action.setToolTip(f"Relabel only the clicked connected component to {value}.")
+                quick_assign_actions[action] = value
+        delete_component_action = None
+        delete_value_action = None
+        if self.mouse_action_enable_check.isChecked():
+            if assign_current_action is not None:
+                menu.addSeparator()
+            delete_component_action = menu.addAction("Delete clicked mask component")
+            delete_component_action.setToolTip("Set only the clicked connected component to background.")
+            delete_value_action = menu.addAction(f"Delete all pixels/voxels with value {label_value}")
+            delete_value_action.setToolTip("Set every pixel/voxel with this value to background.")
         menu.addSeparator()
         locate_action = menu.addAction("Select table row only")
         selected_action = menu.exec_(self._event_global_position(event))
-        if selected_action == delete_component_action:
+        if selected_action == assign_current_action:
+            self._apply_mouse_action(layer, event, "assign_component")
+        elif selected_action in quick_assign_actions:
+            self.set_assignment_value(quick_assign_actions[selected_action])
+            self._apply_mouse_action(layer, event, "assign_component")
+        elif selected_action == delete_component_action:
             self._apply_mouse_action(layer, event, "delete_component")
         elif selected_action == delete_value_action:
             self._apply_mouse_action(layer, event, "delete_value")
@@ -381,6 +436,13 @@ class MaskCleanupTab(QWidget):
         if action == "delete_value":
             data, changed = fast_index.delete_label_value(sub, label_value)
             message = f"Deleted clicked value {label_value}"
+        elif action == "assign_component":
+            if component_id is None:
+                self._log("Clicked mask component is not indexed. Click Analyze Layer / Rebuild Index and try again.")
+                return
+            new_value = int(self.assignment_value_spin.value())
+            data, changed = fast_index.relabel_components(sub, [component_id], new_value)
+            message = f"Assigned clicked component {component_id} from value {label_value} to {new_value}"
         elif action == "delete_component":
             if component_id is None:
                 self._log("Clicked mask component is not indexed. Click Analyze Layer / Rebuild Index and try again.")
@@ -407,7 +469,10 @@ class MaskCleanupTab(QWidget):
             else:
                 self.component_table.set_records(fast_index.active_records())
                 self.refresh_unique_values()
-                self._select_value_row(label_value)
+                if action == "assign_component":
+                    self._select_value_row(int(self.assignment_value_spin.value()))
+                else:
+                    self._select_value_row(label_value)
         else:
             self._log(f"{message} made no mask changes.")
 
@@ -582,17 +647,24 @@ class MaskCleanupTab(QWidget):
         self.undo_btn.setToolTip("Restore the selected Labels layer to its previous Mask Cleanup state.")
         self.undo_btn.clicked.connect(self.undo_last_edit)
         self.undo_btn.setEnabled(False)
-        self.mouse_action_enable_check = QCheckBox("Enable canvas right-click/double-click tools")
-        self.mouse_action_enable_check.setToolTip(
-            "Double-click a mask to select the matching component row. Right-click a mask to open a delete menu."
+        self.canvas_assign_enable_check = QCheckBox("Enable canvas assign tools")
+        self.canvas_assign_enable_check.setToolTip(
+            "When on: right-click a mask to assign only the clicked object to the current class value."
         )
-        self.mouse_action_enable_check.setChecked(True)
+        self.canvas_assign_enable_check.setChecked(False)
+        self.canvas_assign_enable_check.toggled.connect(lambda _checked: self._sync_mouse_action_callback())
+        self.mouse_action_enable_check = QCheckBox("Enable canvas right-click delete tools")
+        self.mouse_action_enable_check.setToolTip(
+            "When on: double-click a mask to select it; right-click a mask to open delete actions."
+        )
+        self.mouse_action_enable_check.setChecked(False)
         self.mouse_action_enable_check.toggled.connect(lambda _checked: self._sync_mouse_action_callback())
         target_row = QHBoxLayout()
         target_row.addWidget(refresh_btn)
         target_row.addWidget(analyze_btn)
         target_row.addWidget(delete_btn)
         target_row.addWidget(self.undo_btn)
+        target_row.addWidget(self.canvas_assign_enable_check)
         target_row.addWidget(self.mouse_action_enable_check)
         target_form.addRow("Target labels layer", self.target_combo)
         target_form.addRow("Operation scope", self.scope_combo)
@@ -602,10 +674,30 @@ class MaskCleanupTab(QWidget):
 
         self.component_table = ComponentTableWidget(
             delete_callback=self.delete_selected_components,
+            assign_callback=self.assign_selected_components_to_current_value,
             locate_callback=self.locate_component,
         )
         self.component_table.setMinimumHeight(170)
         root.addWidget(self.component_table)
+
+        assignment = QHBoxLayout()
+        assignment.addWidget(QLabel("Assignment value"))
+        self.assignment_value_spin = QSpinBox()
+        self.assignment_value_spin.setRange(0, 2_147_483_647)
+        self.assignment_value_spin.setValue(1)
+        self.assignment_value_spin.setToolTip("Class value to assign to selected or clicked objects.")
+        assignment.addWidget(self.assignment_value_spin)
+        for value in range(1, 7):
+            button = QPushButton(str(value))
+            button.setToolTip(f"Set assignment value to {value}.")
+            button.clicked.connect(lambda _checked=False, value=value: self.set_assignment_value(value))
+            assignment.addWidget(button)
+        assign_selected_btn = QPushButton("Assign Selected Components")
+        assign_selected_btn.setToolTip("Relabel selected component rows to the current assignment value.")
+        assign_selected_btn.clicked.connect(self.assign_selected_components_to_current_value)
+        assignment.addWidget(assign_selected_btn)
+        assignment.addStretch(1)
+        root.addLayout(assignment)
 
         self.min_size_spin = QSpinBox()
         self.min_size_spin.setRange(1, 2_147_483_647)
@@ -662,7 +754,7 @@ class MaskCleanupTab(QWidget):
             """
         )
         root.addWidget(self.unique_values_table)
-        self.status_label = QLabel("Mouse ready: double-click a mask to select its table row; right-click for delete actions.")
+        self.status_label = QLabel("Canvas assignment/delete tools are off.")
         root.addWidget(self.status_label)
         relabel_form = QFormLayout()
         self.values_to_replace_edit = QLineEdit()
