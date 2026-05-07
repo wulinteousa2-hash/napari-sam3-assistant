@@ -31,3 +31,21 @@ def test_relabel_components_keeps_component_lookup_valid() -> None:
 
     assert index.component_id_at((2, 2)) == 1
     assert int(updated[2, 2]) == 6
+
+
+def test_build_reports_progress_per_label_value() -> None:
+    data = np.zeros((6, 6), dtype=np.uint8)
+    data[1:3, 1:3] = 1
+    data[4:6, 4:6] = 2
+    events: list[tuple[int, int, str]] = []
+
+    index = FastComponentIndexService().build(
+        data,
+        progress_callback=lambda completed, total, message: events.append((completed, total, message)),
+    )
+
+    assert len(index.active_records()) == 2
+    assert events[0] == (0, 2, "Preparing component analysis...")
+    assert events[-1] == (2, 2, "Component analysis complete.")
+    assert any("Indexed label value 1" in message for _completed, _total, message in events)
+    assert any("Indexed label value 2" in message for _completed, _total, message in events)

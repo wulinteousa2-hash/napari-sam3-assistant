@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-from napari.layers import Labels
+from napari.layers import Image, Labels
 
 
 ACCEPTED_ROLE = "accepted_object"
@@ -20,6 +20,16 @@ REVIEW_STATUSES = {DEFAULT_REVIEW_STATUS, ACCEPTED_STATUS, REJECTED_STATUS, NEED
 
 def is_labels_layer(layer: Any) -> bool:
     return isinstance(layer, Labels)
+
+
+def is_image_layer(layer: Any) -> bool:
+    return isinstance(layer, Image)
+
+
+def image_layer_names(viewer: Any) -> list[str]:
+    if viewer is None:
+        return []
+    return [layer.name for layer in viewer.layers if is_image_layer(layer)]
 
 
 def labels_layer_names(viewer: Any) -> list[str]:

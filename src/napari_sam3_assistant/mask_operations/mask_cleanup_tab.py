@@ -6,6 +6,7 @@ import numpy as np
 from qtpy.QtCore import QPoint
 from qtpy.QtGui import QCursor
 from qtpy.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QFormLayout,
@@ -14,6 +15,7 @@ from qtpy.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QProgressBar,
     QPushButton,
     QSizePolicy,
     QSpinBox,
@@ -27,7 +29,7 @@ from .cleanup_service import MaskCleanupService
 from .component_analysis_service import ComponentAnalysisService
 from .fast_component_index_service import FastComponentIndex, FastComponentIndexService
 from .component_table_widget import ComponentTableWidget
-from .utils import labels_layer_names, safe_get_layer
+from .utils import image_layer_names, labels_layer_names, safe_get_layer
 
 
 UNDO_HISTORY_LIMIT = 20
@@ -68,6 +70,13 @@ class MaskCleanupTab(QWidget):
         index = self.target_combo.findData(current)
         if index >= 0:
             self.target_combo.setCurrentIndex(index)
+        current_image = self.source_image_combo.currentData()
+        self.source_image_combo.clear()
+        for name in image_layer_names(self.viewer):
+            self.source_image_combo.addItem(name, name)
+        image_index = self.source_image_combo.findData(current_image)
+        if image_index >= 0:
+            self.source_image_combo.setCurrentIndex(image_index)
         self._sync_scope_controls()
         self.refresh_unique_values()
         self._track_target_layer()
@@ -79,16 +88,34 @@ class MaskCleanupTab(QWidget):
             self._log("Select a target Labels layer for component analysis.")
             return
         sub, indexer, offset = self._scoped_data(layer)
-        self._fast_index = self.fast_index_builder.build(sub)
+        scope = self._scope_label(layer)
+        self.status_label.setText(f"Analyzing {layer.name} ({scope})...")
+        self.analysis_progress.setRange(0, 100)
+        self.analysis_progress.setValue(0)
+        self.analysis_progress.setFormat("0% - Preparing component analysis...")
+        self.analysis_progress.setVisible(True)
+        QApplication.processEvents()
+        self._fast_index = self.fast_index_builder.build(
+            sub,
+            progress_callback=self._update_analysis_progress,
+        )
         self._fast_index_layer_id = id(layer)
         self._fast_index_scope_key = self._scope_key(layer, indexer)
         self._last_analysis_indexer = indexer
         self._last_analysis_offset = offset
         records = self._fast_index.active_records()
         self.component_table.set_records(records)
-        scope = self._scope_label(layer)
         self.status_label.setText(f"Fast index ready: {len(records)} component(s) indexed in {scope}.")
+        self.analysis_progress.setValue(100)
+        self.analysis_progress.setFormat(f"100% - Indexed {len(records)} component(s)")
         self._log(f"Built fast click index for {len(records)} connected component(s) in {layer.name} ({scope}).")
+
+    def _update_analysis_progress(self, completed: int, total: int, message: str) -> None:
+        value = 100 if total <= 0 else int(round(100 * min(completed, total) / total))
+        self.analysis_progress.setValue(value)
+        self.analysis_progress.setFormat(f"{value}% - {message}")
+        self.status_label.setText(message)
+        QApplication.processEvents()
 
     def delete_selected_components(self) -> None:
         layer = self._target_layer()
@@ -318,6 +345,9 @@ class MaskCleanupTab(QWidget):
         if self._is_right_mouse_event(event):
             self._open_canvas_context_menu(layer, event)
             return
+        if self.axon_cut_enable_check.isChecked():
+            self._apply_mouse_action(layer, event, "cut_axon")
+            return
 
         # Fixed, frictionless canvas behavior:
         # - double-click: select clicked mask/component row
@@ -338,7 +368,11 @@ class MaskCleanupTab(QWidget):
             getattr(self, "canvas_assign_enable_check", None) is not None
             and self.canvas_assign_enable_check.isChecked()
         )
-        return delete_enabled or assign_enabled
+        axon_enabled = bool(
+            getattr(self, "axon_cut_enable_check", None) is not None
+            and self.axon_cut_enable_check.isChecked()
+        )
+        return delete_enabled or assign_enabled or axon_enabled
 
     def _pick_clicked_mask(self, layer, event, *, source: str = "click") -> tuple[int, int | None] | None:
         coords = self._event_data_coords(layer, event)
@@ -386,10 +420,21 @@ class MaskCleanupTab(QWidget):
                 action = quick_menu.addAction(str(value))
                 action.setToolTip(f"Relabel only the clicked connected component to {value}.")
                 quick_assign_actions[action] = value
+        cut_axon_action = None
+        if self.axon_cut_enable_check.isChecked():
+            if assign_current_action is not None:
+                menu.addSeparator()
+            target_text = (
+                f"class {int(self.axon_value_spin.value())}"
+                if self.axon_assign_class_check.isChecked()
+                else "background"
+            )
+            cut_axon_action = menu.addAction(f"Cut axon from clicked point to {target_text}")
+            cut_axon_action.setToolTip("Grow the dark inner region from the clicked point inside the clicked SAM3 mask.")
         delete_component_action = None
         delete_value_action = None
         if self.mouse_action_enable_check.isChecked():
-            if assign_current_action is not None:
+            if assign_current_action is not None or cut_axon_action is not None:
                 menu.addSeparator()
             delete_component_action = menu.addAction("Delete clicked mask component")
             delete_component_action.setToolTip("Set only the clicked connected component to background.")
@@ -403,6 +448,8 @@ class MaskCleanupTab(QWidget):
         elif selected_action in quick_assign_actions:
             self.set_assignment_value(quick_assign_actions[selected_action])
             self._apply_mouse_action(layer, event, "assign_component")
+        elif selected_action == cut_axon_action:
+            self._apply_mouse_action(layer, event, "cut_axon")
         elif selected_action == delete_component_action:
             self._apply_mouse_action(layer, event, "delete_component")
         elif selected_action == delete_value_action:
@@ -429,32 +476,64 @@ class MaskCleanupTab(QWidget):
             self._pick_clicked_mask(layer, event, source="click")
             return
 
-        fast_index = self._ensure_fast_index(layer, sub, indexer)
-        component_id = fast_index.component_id_at(scoped_coords)
-        invalidate_fast_index = False
-
-        if action == "delete_value":
-            data, changed = fast_index.delete_label_value(sub, label_value)
-            message = f"Deleted clicked value {label_value}"
-        elif action == "assign_component":
-            if component_id is None:
-                self._log("Clicked mask component is not indexed. Click Analyze Layer / Rebuild Index and try again.")
+        if action == "cut_axon":
+            image = self._source_image_for_scoped_labels(layer, indexer)
+            if image is None:
+                self._log("Select a source image layer for axon hole cutting.")
                 return
-            new_value = int(self.assignment_value_spin.value())
-            data, changed = fast_index.relabel_components(sub, [component_id], new_value)
-            message = f"Assigned clicked component {component_id} from value {label_value} to {new_value}"
-        elif action == "delete_component":
-            if component_id is None:
-                self._log("Clicked mask component is not indexed. Click Analyze Layer / Rebuild Index and try again.")
+            output_value = int(self.axon_value_spin.value()) if self.axon_assign_class_check.isChecked() else 0
+            self.status_label.setText(
+                f"Cutting axon from click at {coords}: label value {label_value}, "
+                f"target {'class ' + str(output_value) if output_value else 'background'}..."
+            )
+            self._log(
+                f"Axon hole click accepted at {coords} in {layer.name}; "
+                f"value {label_value}."
+            )
+            try:
+                component_mask = self.cleanup.connected_label_mask(sub, scoped_coords, label_value)
+                data, changed, axon_pixels = self.cleanup.cut_seed_similar_region(
+                    sub,
+                    image,
+                    component_mask,
+                    scoped_coords,
+                    output_value=output_value,
+                    threshold_percent=int(self.axon_threshold_spin.value()),
+                    max_fraction_percent=int(self.axon_max_fraction_spin.value()),
+                )
+            except ValueError as exc:
+                self._log(str(exc))
                 return
-            data, changed = fast_index.delete_components(sub, [component_id])
-            message = f"Deleted clicked component {component_id} from value {label_value}"
-        elif action == "keep_value_only":
-            data, changed = self.cleanup.keep_values(sub, [label_value])
             invalidate_fast_index = True
-            message = f"Kept clicked value {label_value} only"
+            target_text = f"class {output_value}" if output_value else "background"
+            message = f"Cut clicked axon region to {target_text} ({axon_pixels} pixel(s)/voxel(s))"
         else:
-            return
+            fast_index = self._ensure_fast_index(layer, sub, indexer)
+            component_id = fast_index.component_id_at(scoped_coords)
+            invalidate_fast_index = False
+
+            if action == "delete_value":
+                data, changed = fast_index.delete_label_value(sub, label_value)
+                message = f"Deleted clicked value {label_value}"
+            elif action == "assign_component":
+                if component_id is None:
+                    self._log("Clicked mask component is not indexed. Click Analyze Layer / Rebuild Index and try again.")
+                    return
+                new_value = int(self.assignment_value_spin.value())
+                data, changed = fast_index.relabel_components(sub, [component_id], new_value)
+                message = f"Assigned clicked component {component_id} from value {label_value} to {new_value}"
+            elif action == "delete_component":
+                if component_id is None:
+                    self._log("Clicked mask component is not indexed. Click Analyze Layer / Rebuild Index and try again.")
+                    return
+                data, changed = fast_index.delete_components(sub, [component_id])
+                message = f"Deleted clicked component {component_id} from value {label_value}"
+            elif action == "keep_value_only":
+                data, changed = self.cleanup.keep_values(sub, [label_value])
+                invalidate_fast_index = True
+                message = f"Kept clicked value {label_value} only"
+            else:
+                return
 
         if changed and self._replace_scoped_layer_data(
             layer,
@@ -464,7 +543,12 @@ class MaskCleanupTab(QWidget):
             invalidate_fast_index=invalidate_fast_index,
         ):
             self._log(f"{message} in {layer.name} ({self._scope_label(layer)}; {changed} pixel(s)/voxel(s)).")
-            if invalidate_fast_index:
+            if action == "cut_axon":
+                self._invalidate_fast_index()
+                self.refresh_unique_values()
+                self._refresh_all()
+                self.status_label.setText(f"{message}.")
+            elif invalidate_fast_index:
                 self.analyze_layer()
             else:
                 self.component_table.set_records(fast_index.active_records())
@@ -624,6 +708,7 @@ class MaskCleanupTab(QWidget):
         target_form = QFormLayout()
         self.target_combo = QComboBox()
         self.target_combo.currentIndexChanged.connect(self._on_target_layer_changed)
+        self.source_image_combo = QComboBox()
         self.scope_combo = QComboBox()
         self.scope_combo.addItem("Current slice", "current_slice")
         self.scope_combo.addItem("Z range", "z_range")
@@ -659,6 +744,12 @@ class MaskCleanupTab(QWidget):
         )
         self.mouse_action_enable_check.setChecked(False)
         self.mouse_action_enable_check.toggled.connect(lambda _checked: self._sync_mouse_action_callback())
+        self.axon_cut_enable_check = QCheckBox("Enable axon hole click tool")
+        self.axon_cut_enable_check.setToolTip(
+            "When on: left-click inside the axon to set the dark connected inner region to background or an axon class."
+        )
+        self.axon_cut_enable_check.setChecked(False)
+        self.axon_cut_enable_check.toggled.connect(lambda _checked: self._sync_mouse_action_callback())
         target_row = QHBoxLayout()
         target_row.addWidget(refresh_btn)
         target_row.addWidget(analyze_btn)
@@ -666,11 +757,19 @@ class MaskCleanupTab(QWidget):
         target_row.addWidget(self.undo_btn)
         target_row.addWidget(self.canvas_assign_enable_check)
         target_row.addWidget(self.mouse_action_enable_check)
+        target_row.addWidget(self.axon_cut_enable_check)
         target_form.addRow("Target labels layer", self.target_combo)
+        target_form.addRow("Source image layer", self.source_image_combo)
         target_form.addRow("Operation scope", self.scope_combo)
         target_form.addRow("Z range", z_row)
         target_form.addRow(target_row)
         root.addLayout(target_form)
+
+        self.analysis_progress = QProgressBar()
+        self.analysis_progress.setRange(0, 100)
+        self.analysis_progress.setValue(0)
+        self.analysis_progress.setFormat("Component analysis idle")
+        root.addWidget(self.analysis_progress)
 
         self.component_table = ComponentTableWidget(
             delete_callback=self.delete_selected_components,
@@ -725,6 +824,34 @@ class MaskCleanupTab(QWidget):
         operations.addWidget(keep_btn, 3, 2)
         operations.setColumnStretch(2, 1)
         root.addLayout(operations)
+
+        axon_row = QHBoxLayout()
+        axon_row.addWidget(QLabel("Seed tolerance %"))
+        self.axon_threshold_spin = QSpinBox()
+        self.axon_threshold_spin.setRange(0, 100)
+        self.axon_threshold_spin.setValue(35)
+        self.axon_threshold_spin.setToolTip(
+            "Higher values grow farther from the clicked seed intensity before stopping at a different-intensity rim."
+        )
+        axon_row.addWidget(self.axon_threshold_spin)
+        axon_row.addWidget(QLabel("Max axon %"))
+        self.axon_max_fraction_spin = QSpinBox()
+        self.axon_max_fraction_spin.setRange(1, 100)
+        self.axon_max_fraction_spin.setValue(75)
+        self.axon_max_fraction_spin.setToolTip("Reject the cut if the detected axon exceeds this share of the clicked mask.")
+        axon_row.addWidget(self.axon_max_fraction_spin)
+        self.axon_assign_class_check = QCheckBox("Assign axon class")
+        self.axon_assign_class_check.setChecked(False)
+        self.axon_assign_class_check.setToolTip("When off, the detected axon is set to background value 0.")
+        axon_row.addWidget(self.axon_assign_class_check)
+        axon_row.addWidget(QLabel("Axon value"))
+        self.axon_value_spin = QSpinBox()
+        self.axon_value_spin.setRange(1, 2_147_483_647)
+        self.axon_value_spin.setValue(2)
+        self.axon_value_spin.setToolTip("Class value used when Assign axon class is enabled.")
+        axon_row.addWidget(self.axon_value_spin)
+        axon_row.addStretch(1)
+        root.addLayout(axon_row)
 
         self.unique_values_table = QTableWidget(0, 2)
         self.unique_values_table.setObjectName("maskValueTable")
@@ -871,6 +998,27 @@ class MaskCleanupTab(QWidget):
         offset[z_axis] = z0
         return arr[tuple(indexer)].copy(), tuple(indexer), tuple(offset)
 
+    def _source_image_for_scoped_labels(self, label_layer, indexer: object) -> np.ndarray | None:
+        image_layer = safe_get_layer(self.viewer, self.source_image_combo.currentData())
+        if image_layer is None:
+            return None
+        image = np.asarray(image_layer.data)
+        labels = np.asarray(label_layer.data)
+        if indexer is Ellipsis:
+            return image
+        if not isinstance(indexer, tuple):
+            return image
+        if image.shape == labels.shape:
+            return image[indexer]
+        if image.ndim == labels.ndim + 1 and image.shape[-1] in (3, 4) and image.shape[:-1] == labels.shape:
+            return image[indexer + (slice(None),)]
+        if image.ndim == labels.ndim + 1 and image.shape[0] in (3, 4) and image.shape[1:] == labels.shape:
+            return image[(slice(None),) + indexer]
+        scoped_shape = np.asarray(label_layer.data[indexer]).shape
+        if image.shape == scoped_shape:
+            return image
+        return image
+
     def _replace_scoped_layer_data(
         self,
         layer,
@@ -939,9 +1087,12 @@ class MaskCleanupTab(QWidget):
             self._suppress_history_event = False
         self._invalidate_fast_index()
         self._log(f"Undid last Mask Cleanup edit on {layer.name}.")
-        self.analyze_layer()
+        self.component_table.set_records([])
         self.refresh_unique_values()
         self._refresh_all()
+        self.status_label.setText(f"Undo restored {layer.name}. Click Analyze Layer to rebuild the component table.")
+        self.analysis_progress.setValue(0)
+        self.analysis_progress.setFormat("Undo complete - analysis index cleared")
         self._update_undo_state()
 
     def _replace_layer_data(self, layer, data, action: str, *, invalidate_fast_index: bool = True) -> bool:

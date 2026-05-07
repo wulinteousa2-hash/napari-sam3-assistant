@@ -17,18 +17,16 @@ The plugin focuses on task-based segmentation workflows:
 
 
 
-## What's New in 4.2.6
+## What's New in 4.2.7
 
-Version 4.2.6 focuses on faster downstream mask operations for users who generate many SAM3 mask layers on the same image.
+Version 4.2.7 focuses on post-SAM myelin cleanup and more responsive Mask Cleanup operations.
 
-- Added a new `Mask Isolation` tab between `Mask Cleanup / Multiclass` and `Merge Layers`.
-- Added candidate consolidation for many aligned SAM3 mask layers: harvest masks, split connected components, assign global candidate IDs, classify duplicates/parents/children/fragments, and create one clean isolated objects layer.
-- Added fast SciPy-based mask harvesting with a visible progress bar so large mask sets no longer look frozen during processing.
-- Added output metadata that records source layers, candidate provenance, included statuses, thresholds, and candidate-to-output ID mapping.
-- Added clearer Mask Operations tooltips and tab descriptions so users know which actions affect the final isolated layer.
-- Added opt-in table right-click actions in `Mask Isolation` for keep, reject, duplicate, parent, child, fragment, locate, and isolate selected candidates.
-- Added quick class assignment tools in `Mask Cleanup / Multiclass` so users can assign final isolated objects to class values `1` through `6` from the table or canvas.
-- Changed canvas cleanup delete actions to be explicit and opt-in, while keeping canvas assignment tools separate from delete tools.
+- Added an axon hole click tool in `Mask Cleanup / Multiclass`: select the original source image, enable the tool, then click inside the axon region of a SAM mask to set that connected seed-similar region to background or an axon class.
+- Added `Seed tolerance %`, `Max axon %`, and optional axon class assignment controls for tuning ring-only or two-class myelin/axon labels.
+- Changed axon cutting to use seed-similar intensity instead of assuming the axon is dark, so it can work when the axon is brighter or darker than the surrounding myelin rim.
+- Added visible progress reporting when `Analyze Layer` builds the Mask Cleanup component index.
+- Made `Undo Last Edit` more responsive by restoring the previous mask immediately and clearing the stale component table/index instead of re-analyzing automatically.
+- Fixed an axon-click `NameError` and a napari/vispy `EventEmitter loop detected` crash caused by re-entering the event loop during canvas mouse handling.
 
 
 ## What's New in 4.2.0

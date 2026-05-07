@@ -2,6 +2,25 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.2.7
+
+### Added
+- Added a click-driven axon hole tool to `Mask Cleanup / Multiclass` for post-SAM myelin cleanup. Users can select a source image, click inside the axon region of a SAM mask, and set the seed-similar connected region to background or an axon class value.
+- Added `Seed tolerance %`, `Max axon %`, and optional axon class assignment controls for tuning axon-hole cuts.
+- Added visible component-analysis progress reporting in `Mask Cleanup / Multiclass` when `Analyze Layer` builds the fast component index.
+- Added focused tests for axon-region extraction, clicked-label flood masks, and fast-index progress callbacks.
+
+### Changed
+- Changed axon cutting from dark-region growth to seed-similar intensity growth, so it can handle either bright axons with dark myelin rims or dark axons with bright rims.
+- Made `Undo Last Edit` in Mask Cleanup return faster by restoring the previous layer data, clearing the stale component index/table, and asking users to rerun `Analyze Layer` only when they need the component table rebuilt.
+- Kept axon cutting constrained to the clicked SAM label component so it does not leak into neighboring objects or background.
+
+### Fixed
+- Fixed axon-hole clicks removing the myelin rim when the rim was darker than the axon interior.
+- Fixed a `NameError` from using `Qt.WaitCursor` without importing `Qt`.
+- Fixed a napari/vispy `EventEmitter loop detected` crash by removing nested `QApplication.processEvents()` calls from the canvas mouse-click path.
+- Fixed slow or unclear feedback after axon-hole clicks by logging the accepted click and updating the status text without re-entering the event loop.
+
 ## 4.2.6
 
 ### Added

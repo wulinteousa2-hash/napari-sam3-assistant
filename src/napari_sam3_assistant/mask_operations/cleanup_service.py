@@ -4,6 +4,7 @@ from collections import deque
 from typing import Any
 
 import numpy as np
+from scipy import ndimage as ndi
 
 from .component_analysis_service import ComponentAnalysisService
 
@@ -76,6 +77,84 @@ class MaskCleanupService:
         arr[mask] = int(target_value)
         return arr, changed
 
+    def connected_label_mask(self, data: Any, seed: tuple[int, ...], label_value: int) -> np.ndarray:
+        arr = np.asarray(data)
+        if len(seed) != arr.ndim or any(coord < 0 or coord >= size for coord, size in zip(seed, arr.shape, strict=False)):
+            raise ValueError("Seed is outside the target labels layer.")
+        if int(arr[seed]) != int(label_value):
+            raise ValueError("Seed does not match the clicked label value.")
+        mask = np.zeros(arr.shape, dtype=bool)
+        queue: deque[tuple[int, ...]] = deque([seed])
+        mask[seed] = True
+        while queue:
+            point = queue.popleft()
+            for neighbor in self._neighbors(point, arr.shape):
+                if mask[neighbor] or int(arr[neighbor]) != int(label_value):
+                    continue
+                mask[neighbor] = True
+                queue.append(neighbor)
+        return mask
+
+    def cut_seed_similar_region(
+        self,
+        labels: Any,
+        image: Any,
+        component_mask: np.ndarray,
+        seed: tuple[int, ...],
+        *,
+        output_value: int,
+        threshold_percent: int,
+        max_fraction_percent: int,
+    ) -> tuple[np.ndarray, int, int]:
+        arr = np.asarray(labels).copy()
+        component = np.asarray(component_mask, dtype=bool)
+        if arr.shape != component.shape:
+            raise ValueError("Component mask shape does not match target labels shape.")
+        if len(seed) != arr.ndim or any(coord < 0 or coord >= size for coord, size in zip(seed, arr.shape, strict=False)):
+            raise ValueError("Axon seed is outside the target labels layer.")
+        if not component[seed]:
+            raise ValueError("Axon seed must be inside the clicked SAM3 mask component.")
+
+        gray = self._coerce_grayscale_image(image, arr.shape)
+        candidate = self._similar_candidate_from_seed(gray, component, seed, int(threshold_percent))
+        axon_mask = self._connected_seed_region(candidate, seed)
+        axon_pixels = int(np.count_nonzero(axon_mask))
+        component_pixels = int(np.count_nonzero(component))
+        if axon_pixels == 0:
+            return arr, 0, component_pixels
+        max_pixels = max(1, int(round(component_pixels * max(1, int(max_fraction_percent)) / 100.0)))
+        if axon_pixels > max_pixels:
+            raise ValueError(
+                f"Detected axon region is {axon_pixels} pixels/voxels, above the "
+                f"{int(max_fraction_percent)}% limit for the clicked component."
+            )
+
+        changed_mask = axon_mask & (arr != int(output_value))
+        changed = int(np.count_nonzero(changed_mask))
+        arr[axon_mask] = int(output_value)
+        return arr, changed, axon_pixels
+
+    def cut_dark_region_from_seed(
+        self,
+        labels: Any,
+        image: Any,
+        component_mask: np.ndarray,
+        seed: tuple[int, ...],
+        *,
+        output_value: int,
+        threshold_percent: int,
+        max_fraction_percent: int,
+    ) -> tuple[np.ndarray, int, int]:
+        return self.cut_seed_similar_region(
+            labels,
+            image,
+            component_mask,
+            seed,
+            output_value=output_value,
+            threshold_percent=threshold_percent,
+            max_fraction_percent=max_fraction_percent,
+        )
+
     def fill_holes(self, data: Any, max_hole_size: int) -> np.ndarray:
         arr = np.asarray(data).copy()
         for label_value in [int(v) for v in np.unique(arr) if int(v) != 0]:
@@ -96,6 +175,53 @@ class MaskCleanupService:
                 smoothed = self._binary_erode(self._binary_dilate(smoothed))
             out[smoothed] = label_value
         return out
+
+    def _coerce_grayscale_image(self, image: Any, target_shape: tuple[int, ...]) -> np.ndarray:
+        arr = np.asarray(image)
+        if arr.shape == target_shape:
+            return arr.astype(np.float32, copy=False)
+        if arr.ndim == len(target_shape) + 1 and arr.shape[-1] in (3, 4) and arr.shape[:-1] == target_shape:
+            return arr[..., :3].astype(np.float32, copy=False).mean(axis=-1)
+        if arr.ndim == len(target_shape) + 1 and arr.shape[0] in (3, 4) and arr.shape[1:] == target_shape:
+            return arr[:3].astype(np.float32, copy=False).mean(axis=0)
+        if arr.shape[-len(target_shape) :] == target_shape:
+            reduced = arr
+            while reduced.ndim > len(target_shape):
+                reduced = reduced.mean(axis=0)
+            return reduced.astype(np.float32, copy=False)
+        raise ValueError(
+            f"Source image shape {arr.shape} cannot be aligned to target labels shape {target_shape}."
+        )
+
+    def _similar_candidate_from_seed(
+        self,
+        image: np.ndarray,
+        component: np.ndarray,
+        seed: tuple[int, ...],
+        threshold_percent: int,
+    ) -> np.ndarray:
+        values = image[component].astype(np.float32, copy=False)
+        if values.size == 0:
+            return np.zeros(component.shape, dtype=bool)
+        seed_value = float(image[seed])
+        high = float(np.percentile(values, 90.0))
+        low = float(np.percentile(values, 10.0))
+        span = max(high - low, np.finfo(np.float32).eps)
+        fraction = max(0.0, min(float(threshold_percent), 100.0)) / 100.0
+        tolerance = span * fraction
+        return component & (np.abs(image - seed_value) <= tolerance)
+
+    def _connected_seed_region(self, candidate: np.ndarray, seed: tuple[int, ...]) -> np.ndarray:
+        if not bool(candidate[seed]):
+            region = np.zeros(candidate.shape, dtype=bool)
+            region[seed] = True
+            return region
+        structure = ndi.generate_binary_structure(candidate.ndim, 1)
+        labeled, _count = ndi.label(candidate, structure=structure)
+        component_id = int(labeled[seed])
+        if component_id <= 0:
+            return np.zeros(candidate.shape, dtype=bool)
+        return labeled == component_id
 
     def _fill_binary_holes(self, binary: np.ndarray, max_hole_size: int) -> np.ndarray:
         background = ~binary

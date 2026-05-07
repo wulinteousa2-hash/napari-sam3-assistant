@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from collections import deque
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -133,7 +134,11 @@ class FastComponentIndexService:
     lookup map so repeated mouse clicks avoid repeated flood-fill analysis.
     """
 
-    def build(self, data: Any) -> FastComponentIndex:
+    def build(
+        self,
+        data: Any,
+        progress_callback: Callable[[int, int, str], None] | None = None,
+    ) -> FastComponentIndex:
         arr = np.asarray(data)
         component_id_map = np.zeros(arr.shape, dtype=np.int32)
         records: dict[int, ComponentRecord] = {}
@@ -142,7 +147,11 @@ class FastComponentIndexService:
 
         visited = np.zeros(arr.shape, dtype=bool)
         component_id = 1
-        for label_value in [int(v) for v in np.unique(arr) if int(v) != 0]:
+        label_values = [int(v) for v in np.unique(arr) if int(v) != 0]
+        total = max(1, len(label_values))
+        if progress_callback is not None:
+            progress_callback(0, total, "Preparing component analysis...")
+        for completed, label_value in enumerate(label_values, start=1):
             positions = np.argwhere((arr == label_value) & ~visited)
             for start in positions:
                 start_tuple = tuple(int(v) for v in start)
@@ -154,6 +163,14 @@ class FastComponentIndexService:
                 component_id_map[tuple(coords.T)] = component_id
                 records[component_id] = self._record(component_id, label_value, coords, arr.ndim)
                 component_id += 1
+            if progress_callback is not None:
+                progress_callback(
+                    completed,
+                    total,
+                    f"Indexed label value {label_value} ({completed}/{total})",
+                )
+        if progress_callback is not None:
+            progress_callback(total, total, "Component analysis complete.")
         return FastComponentIndex(shape=tuple(arr.shape), component_id_map=component_id_map, records=records)
 
     def _record(self, component_id: int, label_value: int, coords: np.ndarray, ndim: int) -> ComponentRecord:
