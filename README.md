@@ -17,15 +17,21 @@ The plugin focuses on task-based segmentation workflows:
 
 
 
-## What's New in 4.2.7
+## What's New in 4.2.8
 
-Version 4.2.7 focuses on post-SAM myelin cleanup and more responsive Mask Cleanup operations.
+Version 4.2.8 polishes the post-SAM myelin cleanup workflow with an actionable batch axon review table and clearer local-edit controls.
 
 - Added an axon hole click tool in `Mask Cleanup / Multiclass`: select the original source image, enable the tool, then click inside the axon region of a SAM mask to set that connected seed-similar region to background or an axon class.
+- Split Mask Cleanup into internal `Local Edit`, `Components`, and `Values` sections so fast canvas correction, full component-table review, and class/value remapping are easier to understand.
+- Added preview-first batch axon hole proposals in `Local Edit`, including an actionable proposal table, optional ROI Shapes layer filtering, a preview labels layer, row-click locate, selected-row apply/skip, and selected proposal hole filling.
+- Added sortable batch proposal columns plus selected/status export actions so confident, review, failed, skipped, or custom-selected axon proposals can be written to separate preview layers before applying edits.
+- Added table actions and tooltips for locating proposals, applying selected proposals, filling selected axon holes, skipping low-confidence proposals, and exporting review groups.
 - Added `Seed tolerance %`, `Max axon %`, and optional axon class assignment controls for tuning ring-only or two-class myelin/axon labels.
 - Changed axon cutting to use seed-similar intensity instead of assuming the axon is dark, so it can work when the axon is brighter or darker than the surrounding myelin rim.
 - Added visible progress reporting when `Analyze Layer` builds the Mask Cleanup component index.
 - Made `Undo Last Edit` more responsive by restoring the previous mask immediately and clearing the stale component table/index instead of re-analyzing automatically.
+- Made local and value edits mark the component table stale instead of silently rebuilding the full component index; users explicitly click `Analyze Layer` when they need the global component list refreshed.
+- Removed deprecated `viewer.window.qt_viewer` access from canvas context-menu positioning.
 - Fixed an axon-click `NameError` and a napari/vispy `EventEmitter loop detected` crash caused by re-entering the event loop during canvas mouse handling.
 
 

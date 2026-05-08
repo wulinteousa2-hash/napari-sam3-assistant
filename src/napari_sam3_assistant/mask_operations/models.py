@@ -51,6 +51,24 @@ class ComponentRecord:
         return f"{self.z_min}:{self.z_max}"
 
 
+@dataclass(frozen=True)
+class AxonHoleCandidate:
+    candidate_id: int
+    label_value: int
+    object_area: int
+    axon_area: int
+    axon_fraction: float
+    confidence: float
+    status: str
+    reason: str
+    seed: tuple[int, ...]
+    bbox: tuple[tuple[int, int], ...]
+
+    @property
+    def bbox_text(self) -> str:
+        return ", ".join(f"{lo}:{hi}" for lo, hi in self.bbox)
+
+
 @dataclass
 class CandidateObjectRecord:
     candidate_id: int

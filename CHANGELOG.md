@@ -2,18 +2,41 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.2.8
+
+### Added
+- Added a more actionable batch axon proposal table in `Mask Cleanup / Multiclass`, including row-click locate, selected-row apply, selected-row hole filling, selected-row skip, low-confidence skip, visible-row selection, and status-based selection.
+- Added sortable batch axon proposal columns so users can quickly group confident, review, failed, skipped, or custom-selected proposals.
+- Added selected/status export actions for batch axon proposals so confident, review, failed, skipped, or manually selected masks can be written to separate labels layers before edits are applied.
+- Added tooltips for batch axon controls and review/export actions.
+
+### Changed
+- Clarified the Mask Cleanup local-edit workflow around preview-first batch axon carving, manual review, and safe export layers.
+- Kept batch axon review table cells read-only so the table is used for inspection, grouping, locating, applying, skipping, filling, and exporting rather than accidental value editing.
+
+### Fixed
+- Removed deprecated `viewer.window.qt_viewer` usage from canvas context-menu positioning.
+- Fixed the batch axon review/export workflow so review groups can be separated without changing the source labels layer.
+
 ## 4.2.7
 
 ### Added
 - Added a click-driven axon hole tool to `Mask Cleanup / Multiclass` for post-SAM myelin cleanup. Users can select a source image, click inside the axon region of a SAM mask, and set the seed-similar connected region to background or an axon class value.
 - Added `Seed tolerance %`, `Max axon %`, and optional axon class assignment controls for tuning axon-hole cuts.
 - Added visible component-analysis progress reporting in `Mask Cleanup / Multiclass` when `Analyze Layer` builds the fast component index.
+- Added internal `Local Edit`, `Components`, and `Values` sections inside Mask Cleanup so local canvas edits, global component-table review, and class/value remapping have separate workflows.
+- Added preview-first batch axon hole proposals in `Local Edit`, with an actionable review table, optional ROI Shapes layer filtering, a preview labels layer, and `Apply Confident` for high-confidence axon cuts.
+- Added batch proposal review actions for locating selected axons, applying selected proposals, skipping selected or low-confidence proposals, and filling holes inside selected proposed axon masks.
+- Added sorting, status-based selection, and export actions for batch axon proposal masks so users can create separate confident/review/failed/selected layers without editing the target labels.
 - Added focused tests for axon-region extraction, clicked-label flood masks, and fast-index progress callbacks.
 
 ### Changed
 - Changed axon cutting from dark-region growth to seed-similar intensity growth, so it can handle either bright axons with dark myelin rims or dark axons with bright rims.
 - Made `Undo Last Edit` in Mask Cleanup return faster by restoring the previous layer data, clearing the stale component index/table, and asking users to rerun `Analyze Layer` only when they need the component table rebuilt.
 - Kept axon cutting constrained to the clicked SAM label component so it does not leak into neighboring objects or background.
+- Changed canvas mouse behavior to follow the active Mask Cleanup section: local flood-fill tools in `Local Edit`, fresh-index component selection/actions in `Components`, and label-value selection/actions in `Values`.
+- Stopped local and value edits from silently rebuilding the global component index; edited masks now mark the component table stale until users explicitly click `Analyze Layer`.
+- Batch axon preview uses a distance-transform seed inside each candidate object instead of requiring the user to click each axon manually.
 
 ### Fixed
 - Fixed axon-hole clicks removing the myelin rim when the rim was darker than the axon interior.

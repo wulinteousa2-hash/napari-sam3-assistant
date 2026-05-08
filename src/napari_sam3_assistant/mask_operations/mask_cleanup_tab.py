@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Callable
 
 import numpy as np
-from qtpy.QtCore import QPoint
 from qtpy.QtGui import QCursor
 from qtpy.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -19,6 +20,8 @@ from qtpy.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSpinBox,
+    QTableWidgetSelectionRange,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -29,7 +32,8 @@ from .cleanup_service import MaskCleanupService
 from .component_analysis_service import ComponentAnalysisService
 from .fast_component_index_service import FastComponentIndex, FastComponentIndexService
 from .component_table_widget import ComponentTableWidget
-from .utils import image_layer_names, labels_layer_names, safe_get_layer
+from .models import AxonHoleCandidate
+from .utils import copy_layer_geometry, image_layer_names, labels_layer_names, safe_get_layer, shapes_layer_names, unique_layer_name
 
 
 UNDO_HISTORY_LIMIT = 20
@@ -59,6 +63,12 @@ class MaskCleanupTab(QWidget):
         self._fast_index: FastComponentIndex | None = None
         self._fast_index_layer_id: int | None = None
         self._fast_index_scope_key: tuple | None = None
+        self._component_index_stale = True
+        self._batch_axon_candidates: list[AxonHoleCandidate] = []
+        self._batch_axon_masks: dict[int, np.ndarray] = {}
+        self._batch_preview_layer_name: str | None = None
+        self._batch_preview_indexer: object = Ellipsis
+        self._batch_preview_shape: tuple[int, ...] | None = None
         self._build_ui()
         self.refresh()
 
@@ -77,6 +87,15 @@ class MaskCleanupTab(QWidget):
         image_index = self.source_image_combo.findData(current_image)
         if image_index >= 0:
             self.source_image_combo.setCurrentIndex(image_index)
+        current_roi = self.batch_roi_combo.currentData() if hasattr(self, "batch_roi_combo") else None
+        if hasattr(self, "batch_roi_combo"):
+            self.batch_roi_combo.clear()
+            self.batch_roi_combo.addItem("No ROI shape", "")
+            for name in shapes_layer_names(self.viewer):
+                self.batch_roi_combo.addItem(name, name)
+            roi_index = self.batch_roi_combo.findData(current_roi)
+            if roi_index >= 0:
+                self.batch_roi_combo.setCurrentIndex(roi_index)
         self._sync_scope_controls()
         self.refresh_unique_values()
         self._track_target_layer()
@@ -101,6 +120,7 @@ class MaskCleanupTab(QWidget):
         )
         self._fast_index_layer_id = id(layer)
         self._fast_index_scope_key = self._scope_key(layer, indexer)
+        self._component_index_stale = False
         self._last_analysis_indexer = indexer
         self._last_analysis_offset = offset
         records = self._fast_index.active_records()
@@ -124,7 +144,10 @@ class MaskCleanupTab(QWidget):
             self._log("Select component rows to delete.")
             return
         sub, indexer, _offset = self._scoped_data(layer)
-        fast_index = self._ensure_fast_index(layer, sub, indexer)
+        fast_index = self._fresh_fast_index(layer, sub, indexer)
+        if fast_index is None:
+            self._log("Component index is stale or not built. Click Analyze Layer before deleting selected components.")
+            return
         cleaned, changed = fast_index.delete_components(sub, ids)
         if changed and self._replace_scoped_layer_data(layer, cleaned, indexer, "delete selected components", invalidate_fast_index=False):
             self.component_table.set_records(fast_index.active_records())
@@ -141,7 +164,10 @@ class MaskCleanupTab(QWidget):
             return
         new_value = int(self.assignment_value_spin.value())
         sub, indexer, _offset = self._scoped_data(layer)
-        fast_index = self._ensure_fast_index(layer, sub, indexer)
+        fast_index = self._fresh_fast_index(layer, sub, indexer)
+        if fast_index is None:
+            self._log("Component index is stale or not built. Click Analyze Layer before assigning selected components.")
+            return
         data, changed = fast_index.relabel_components(sub, ids, new_value)
         if changed and self._replace_scoped_layer_data(layer, data, indexer, "assign selected components", invalidate_fast_index=False):
             self.component_table.set_records(fast_index.active_records())
@@ -201,7 +227,6 @@ class MaskCleanupTab(QWidget):
         data, changed = self.cleanup.relabel_values(sub, source_values, self.new_value_spin.value())
         if changed and self._replace_scoped_layer_data(layer, data, indexer, "relabel values"):
             self._log(f"Relabeled {changed} pixel(s)/voxel(s) in {layer.name}.")
-            self.analyze_layer()
             self.refresh_unique_values()
         else:
             self._log("Relabel made no mask changes.")
@@ -226,7 +251,6 @@ class MaskCleanupTab(QWidget):
         data, changed = self.cleanup.delete_values(sub, values)
         if changed and self._replace_scoped_layer_data(layer, data, indexer, "delete selected values"):
             self._log(f"Deleted label value(s) {values} from {layer.name} ({changed} pixel(s)/voxel(s)).")
-            self.analyze_layer()
             self.refresh_unique_values()
             self._refresh_all()
         else:
@@ -244,7 +268,6 @@ class MaskCleanupTab(QWidget):
         data, changed = self.cleanup.keep_values(sub, values)
         if changed and self._replace_scoped_layer_data(layer, data, indexer, "keep selected values only"):
             self._log(f"Kept only label value(s) {values} in {layer.name}.")
-            self.analyze_layer()
             self.refresh_unique_values()
             self._refresh_all()
         else:
@@ -259,11 +282,374 @@ class MaskCleanupTab(QWidget):
         data, changed = self.cleanup.convert_nonzero_to_value(sub, self.new_value_spin.value())
         if changed and self._replace_scoped_layer_data(layer, data, indexer, "convert non-zero to class"):
             self._log(f"Converted non-zero labels to class value {self.new_value_spin.value()} in {layer.name}.")
-            self.analyze_layer()
             self.refresh_unique_values()
             self._refresh_all()
         else:
             self._log("Convert non-zero made no mask changes.")
+
+    def preview_batch_axons(self) -> None:
+        layer = self._target_layer()
+        if layer is None:
+            self._log("Select a target Labels layer.")
+            return
+        sub, indexer, _offset = self._scoped_data(layer)
+        image = self._source_image_for_scoped_labels(layer, indexer)
+        if image is None:
+            self._log("Select a source image layer before batch axon preview.")
+            return
+        try:
+            roi_mask = self._batch_roi_mask(layer, indexer, sub.shape)
+            candidates, masks, preview = self.cleanup.propose_axon_holes(
+                sub,
+                image,
+                threshold_percent=int(self.axon_threshold_spin.value()),
+                max_fraction_percent=int(self.axon_max_fraction_spin.value()),
+                min_object_size=int(self.batch_min_object_spin.value()),
+                min_confidence_percent=int(self.batch_min_confidence_spin.value()),
+                roi_mask=roi_mask,
+                progress_callback=self._update_batch_preview_progress,
+            )
+        except ValueError as exc:
+            self._log(str(exc))
+            return
+        self._batch_axon_candidates = candidates
+        self._batch_axon_masks = masks
+        self._batch_preview_indexer = indexer
+        self._batch_preview_shape = tuple(preview.shape)
+        self._set_batch_axon_records(candidates)
+        self._write_batch_preview_layer(layer, preview, indexer)
+        counts: dict[str, int] = {}
+        for candidate in candidates:
+            counts[candidate.status] = counts.get(candidate.status, 0) + 1
+        summary = ", ".join(f"{key}: {value}" for key, value in sorted(counts.items())) or "none"
+        self.status_label.setText(f"Batch axon preview ready: {len(candidates)} proposal(s), {summary}.")
+        self._log(f"Batch axon preview created {len(candidates)} proposal(s): {summary}.")
+
+    def apply_confident_batch_axons(self) -> None:
+        self._apply_batch_axons(candidate_ids=None, action_name="apply confident batch axon holes")
+
+    def apply_selected_batch_axons(self) -> None:
+        ids = self._selected_batch_axon_ids()
+        if not ids:
+            self._log("Select one or more batch axon proposal rows to apply.")
+            return
+        self._apply_batch_axons(candidate_ids=ids, action_name="apply selected batch axon holes")
+
+    def _apply_batch_axons(self, *, candidate_ids: set[int] | None, action_name: str) -> None:
+        layer = self._target_layer()
+        if layer is None:
+            self._log("Select a target Labels layer.")
+            return
+        if not self._batch_axon_candidates:
+            self._log("Run Preview Batch Axons before applying confident proposals.")
+            return
+        sub, indexer, _offset = self._scoped_data(layer)
+        output_value = int(self.axon_value_spin.value()) if self.axon_assign_class_check.isChecked() else 0
+        data, applied, changed = self.cleanup.apply_axon_hole_candidates(
+            sub,
+            self._batch_axon_candidates,
+            self._batch_axon_masks,
+            output_value=output_value,
+            min_confidence_percent=int(self.batch_min_confidence_spin.value()),
+            candidate_ids=candidate_ids,
+        )
+        if applied <= 0 or changed <= 0:
+            self._log("No batch axon proposals were applied.")
+            return
+        if self._replace_scoped_layer_data(layer, data, indexer, action_name):
+            self._invalidate_fast_index()
+            self.refresh_unique_values()
+            self._refresh_all()
+            self.status_label.setText(
+                f"Applied {applied} batch axon hole(s), changed {changed} pixel(s)/voxel(s). "
+                "Component table is stale; click Analyze Layer to rebuild."
+            )
+            self._log(f"Applied {applied} batch axon hole(s) to {layer.name} ({changed} pixel(s)/voxel(s)).")
+
+    def fill_selected_batch_axon_holes(self) -> None:
+        ids = self._selected_batch_axon_ids()
+        if not ids:
+            self._log("Select one or more batch axon proposal rows to fill.")
+            return
+        candidates, masks, filled = self.cleanup.fill_axon_candidate_holes(
+            self._batch_axon_candidates,
+            self._batch_axon_masks,
+            ids,
+            min_confidence_percent=int(self.batch_min_confidence_spin.value()),
+            max_fraction_percent=int(self.axon_max_fraction_spin.value()),
+        )
+        self._batch_axon_candidates = candidates
+        self._batch_axon_masks = masks
+        self._set_batch_axon_records(candidates)
+        self._refresh_batch_preview_layer()
+        self.status_label.setText(f"Filled {filled} hole pixel(s) in selected batch axon proposal(s).")
+        self._log(f"Filled {filled} hole pixel(s) in selected batch axon proposal(s).")
+
+    def skip_selected_batch_axons(self) -> None:
+        ids = self._selected_batch_axon_ids()
+        if not ids:
+            self._log("Select one or more batch axon proposal rows to skip.")
+            return
+        self._mark_batch_axon_candidates(ids, "skipped", "user skipped")
+
+    def skip_low_confidence_batch_axons(self) -> None:
+        threshold = float(self.batch_min_confidence_spin.value()) / 100.0
+        ids = {
+            candidate.candidate_id
+            for candidate in self._batch_axon_candidates
+            if candidate.confidence < threshold
+        }
+        if not ids:
+            self._log("No low-confidence batch axon proposals to skip.")
+            return
+        self._mark_batch_axon_candidates(ids, "skipped", "below confidence threshold")
+
+    def _mark_batch_axon_candidates(self, ids: set[int], status: str, reason: str) -> None:
+        selected = {int(value) for value in ids}
+        self._batch_axon_candidates = [
+            replace(candidate, status=status, reason=reason)
+            if candidate.candidate_id in selected
+            else candidate
+            for candidate in self._batch_axon_candidates
+        ]
+        for candidate_id in selected:
+            self._batch_axon_masks.pop(candidate_id, None)
+        self._set_batch_axon_records(self._batch_axon_candidates)
+        self._refresh_batch_preview_layer()
+        self.status_label.setText(f"Marked {len(selected)} batch axon proposal(s) as {status}.")
+
+    def select_visible_batch_axons(self) -> None:
+        rows = self.batch_axon_table.rowCount()
+        if rows <= 0:
+            return
+        self.batch_axon_table.clearSelection()
+        self.batch_axon_table.setRangeSelected(
+            QTableWidgetSelectionRange(0, 0, rows - 1, self.batch_axon_table.columnCount() - 1),
+            True,
+        )
+        self.status_label.setText(f"Selected {rows} visible batch axon proposal row(s).")
+
+    def select_batch_axons_by_status(self, status: str) -> None:
+        self.batch_axon_table.clearSelection()
+        selected_rows = 0
+        for row in range(self.batch_axon_table.rowCount()):
+            item = self.batch_axon_table.item(row, 0)
+            if item is not None and item.text() == status:
+                self.batch_axon_table.selectRow(row)
+                selected_rows += 1
+        self.status_label.setText(f"Selected {selected_rows} batch axon proposal row(s) with status {status}.")
+
+    def export_selected_batch_axon_layer(self) -> None:
+        ids = self._selected_batch_axon_ids()
+        if not ids:
+            self._log("Select one or more batch axon proposal rows to export.")
+            return
+        self._export_batch_axon_layer(ids, "selected")
+
+    def export_batch_axon_layer_by_status(self, status: str) -> None:
+        ids = {
+            candidate.candidate_id
+            for candidate in self._batch_axon_candidates
+            if candidate.status == status
+        }
+        if not ids:
+            self._log(f"No batch axon proposals with status {status}.")
+            return
+        self._export_batch_axon_layer(ids, status)
+
+    def _export_batch_axon_layer(self, ids: set[int], group_name: str) -> None:
+        target_layer = self._target_layer()
+        if target_layer is None or self._batch_preview_shape is None:
+            self._log("Run Preview Batch Axons before exporting proposal layers.")
+            return
+        preview = np.zeros(self._batch_preview_shape, dtype=np.uint32)
+        for output_id, candidate_id in enumerate(sorted(int(value) for value in ids), start=1):
+            candidate = self._batch_axon_candidate(candidate_id)
+            mask = self._batch_axon_masks.get(candidate_id)
+            if candidate is None or mask is None:
+                continue
+            preview_slice = preview[tuple(slice(int(lo), int(hi)) for lo, hi in candidate.bbox)]
+            preview_slice[mask] = int(output_id)
+        full = np.zeros_like(np.asarray(target_layer.data), dtype=np.uint32)
+        if self._batch_preview_indexer is Ellipsis:
+            full = preview
+        else:
+            full[self._batch_preview_indexer] = preview
+        name = unique_layer_name(self.viewer, f"batch_axon_{group_name}")
+        layer = self.viewer.add_labels(
+            full,
+            name=name,
+            metadata={
+                "sam3_role": "batch_axon_export",
+                "batch_group": group_name,
+                "source_layer": target_layer.name,
+                "candidate_ids": sorted(int(value) for value in ids),
+            },
+        )
+        copy_layer_geometry(target_layer, layer)
+        self.status_label.setText(f"Exported {len(ids)} batch axon proposal(s) to {name}.")
+
+    def _update_batch_preview_progress(self, completed: int, total: int, message: str) -> None:
+        if hasattr(self, "status_label"):
+            self.status_label.setText(message)
+        QApplication.processEvents()
+
+    def _set_batch_axon_records(self, candidates: list[AxonHoleCandidate]) -> None:
+        self.batch_axon_table.setSortingEnabled(False)
+        self.batch_axon_table.setRowCount(0)
+        for candidate in candidates:
+            row = self.batch_axon_table.rowCount()
+            self.batch_axon_table.insertRow(row)
+            values = [
+                candidate.status,
+                str(candidate.candidate_id),
+                f"{candidate.confidence * 100:.0f}%",
+                str(candidate.axon_area),
+                str(candidate.object_area),
+                f"{candidate.axon_fraction * 100:.1f}%",
+                candidate.reason,
+            ]
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setData(256, int(candidate.candidate_id))
+                self.batch_axon_table.setItem(row, col, item)
+        self.batch_axon_table.setSortingEnabled(True)
+
+    def _selected_batch_axon_ids(self) -> set[int]:
+        selected: set[int] = set()
+        selection = self.batch_axon_table.selectionModel()
+        if selection is None:
+            return selected
+        for index in selection.selectedRows():
+            item = self.batch_axon_table.item(index.row(), 1)
+            if item is not None:
+                selected.add(int(item.text()))
+        return selected
+
+    def _batch_axon_candidate(self, candidate_id: int) -> AxonHoleCandidate | None:
+        for candidate in self._batch_axon_candidates:
+            if candidate.candidate_id == int(candidate_id):
+                return candidate
+        return None
+
+    def locate_selected_batch_axon(self) -> None:
+        ids = self._selected_batch_axon_ids()
+        if not ids:
+            self._log("Select a batch axon proposal row to locate.")
+            return
+        self.locate_batch_axon(next(iter(sorted(ids))))
+
+    def locate_batch_axon_from_cell(self, row: int, _column: int) -> None:
+        item = self.batch_axon_table.item(row, 1)
+        if item is None:
+            return
+        self.locate_batch_axon(int(item.text()))
+
+    def locate_batch_axon(self, candidate_id: int) -> None:
+        candidate = self._batch_axon_candidate(candidate_id)
+        layer = self._target_layer()
+        if candidate is None or layer is None:
+            return
+        data_position = self._scoped_position_to_layer_coords(candidate.seed, self._batch_preview_indexer, np.asarray(layer.data).ndim)
+        self._center_view_on_data_position(layer, np.asarray(data_position, dtype=float))
+        preview_layer = safe_get_layer(self.viewer, self._batch_preview_layer_name)
+        if preview_layer is not None:
+            preview_layer.visible = True
+        self.status_label.setText(
+            f"Located batch axon proposal {candidate.candidate_id}: {candidate.status}, "
+            f"confidence {candidate.confidence * 100:.0f}%."
+        )
+
+    def _scoped_position_to_layer_coords(self, scoped: tuple[int, ...], indexer: object, ndim: int) -> tuple[int, ...]:
+        if indexer is Ellipsis or not isinstance(indexer, tuple):
+            return tuple(int(value) for value in scoped)
+        out: list[int] = []
+        scoped_axis = 0
+        for selector in indexer:
+            if isinstance(selector, int):
+                out.append(int(selector))
+            elif isinstance(selector, slice):
+                start = 0 if selector.start is None else int(selector.start)
+                out.append(start + int(scoped[scoped_axis]))
+                scoped_axis += 1
+            else:
+                out.append(int(scoped[scoped_axis]))
+                scoped_axis += 1
+        while len(out) < ndim and scoped_axis < len(scoped):
+            out.append(int(scoped[scoped_axis]))
+            scoped_axis += 1
+        return tuple(out)
+
+    def _write_batch_preview_layer(self, target_layer, preview: np.ndarray, indexer: object) -> None:
+        if preview.size == 0:
+            return
+        full = np.zeros_like(np.asarray(target_layer.data), dtype=np.uint32)
+        if indexer is Ellipsis:
+            full = preview.astype(np.uint32, copy=False)
+        else:
+            full[indexer] = preview.astype(np.uint32, copy=False)
+        existing = safe_get_layer(self.viewer, self._batch_preview_layer_name)
+        if existing is not None:
+            existing.data = full
+            existing.refresh()
+            return
+        name = unique_layer_name(self.viewer, "batch_axon_hole_preview")
+        layer = self.viewer.add_labels(
+            full,
+            name=name,
+            metadata={"sam3_role": "batch_axon_hole_preview", "created_from": "Mask Cleanup"},
+        )
+        copy_layer_geometry(target_layer, layer)
+        self._batch_preview_layer_name = name
+
+    def _refresh_batch_preview_layer(self) -> None:
+        layer = self._target_layer()
+        if layer is None or self._batch_preview_shape is None:
+            return
+        preview = np.zeros(self._batch_preview_shape, dtype=np.uint32)
+        for candidate in self._batch_axon_candidates:
+            if candidate.status == "skipped":
+                continue
+            mask = self._batch_axon_masks.get(candidate.candidate_id)
+            if mask is None:
+                continue
+            slices = tuple(slice(int(lo), int(hi)) for lo, hi in candidate.bbox)
+            preview_slice = preview[slices]
+            preview_slice[mask] = int(candidate.candidate_id)
+        self._write_batch_preview_layer(layer, preview, self._batch_preview_indexer)
+
+    def _batch_roi_mask(self, label_layer, indexer: object, shape: tuple[int, ...]) -> np.ndarray | None:
+        roi_layer = safe_get_layer(self.viewer, self.batch_roi_combo.currentData())
+        if roi_layer is None:
+            return None
+        data = list(getattr(roi_layer, "data", []) or [])
+        if not data:
+            return None
+        full_mask = np.zeros(np.asarray(label_layer.data).shape, dtype=bool)
+        for vertices in data:
+            arr = np.asarray(vertices)
+            if arr.size == 0:
+                continue
+            coord_count = min(int(arr.shape[-1]), full_mask.ndim)
+            coords = arr[..., -coord_count:]
+            mins = np.floor(np.min(coords, axis=0)).astype(int)
+            maxs = np.ceil(np.max(coords, axis=0)).astype(int) + 1
+            slices = [slice(None)] * full_mask.ndim
+            start_axis = full_mask.ndim - coord_count
+            for offset, axis in enumerate(range(start_axis, full_mask.ndim)):
+                size = full_mask.shape[axis]
+                lo = max(0, min(size, int(mins[offset])))
+                hi = max(lo, min(size, int(maxs[offset])))
+                slices[axis] = slice(lo, hi)
+            full_mask[tuple(slices)] = True
+        if indexer is Ellipsis:
+            roi = full_mask
+        else:
+            roi = full_mask[indexer]
+        if roi.shape != tuple(shape) or not np.any(roi):
+            return None
+        return roi
+
 
     def refresh_unique_values(self) -> None:
         layer = self._target_layer()
@@ -282,11 +668,6 @@ class MaskCleanupTab(QWidget):
 
     def _sync_mouse_action_callback(self) -> None:
         self._disconnect_mouse_action_callback()
-        if not getattr(self, "mouse_action_enable_check", None):
-            return
-        if not self._any_canvas_tool_enabled():
-            self.status_label.setText("Canvas assignment/delete tools are off.")
-            return
         layer = self._target_layer()
         if layer is None:
             return
@@ -314,7 +695,7 @@ class MaskCleanupTab(QWidget):
             layer.mode = "pick"
         except Exception:
             pass
-        self.status_label.setText("Canvas tools ready: click to select, right-click for enabled actions.")
+        self.status_label.setText(self._mouse_mode_status())
 
     def _disconnect_mouse_action_callback(self) -> None:
         layer = self._mouse_layer
@@ -345,7 +726,8 @@ class MaskCleanupTab(QWidget):
         if self._is_right_mouse_event(event):
             self._open_canvas_context_menu(layer, event)
             return
-        if self.axon_cut_enable_check.isChecked():
+        mode = self._cleanup_subtab()
+        if mode == "local" and self.axon_cut_enable_check.isChecked():
             self._apply_mouse_action(layer, event, "cut_axon")
             return
 
@@ -357,7 +739,7 @@ class MaskCleanupTab(QWidget):
         self._pick_clicked_mask(layer, event, source="click")
 
     def _mouse_enabled_for_layer(self, layer) -> bool:
-        return self._any_canvas_tool_enabled() and layer is self._target_layer()
+        return layer is self._target_layer()
 
     def _any_canvas_tool_enabled(self) -> bool:
         delete_enabled = bool(
@@ -388,19 +770,21 @@ class MaskCleanupTab(QWidget):
             self.status_label.setText("Clicked mask is outside the selected operation scope.")
             return None
 
-        fast_index = self._ensure_fast_index(layer, sub, indexer)
-        component_id = fast_index.component_id_at(scoped_coords)
         self._select_value_row(label_value)
-        if component_id is not None:
-            self.component_table.select_component_id(component_id)
-        self.status_label.setText(
-            f"Selected value {label_value}" + (f", component {component_id}" if component_id else "")
-        )
-        self._log(
-            f"{source.capitalize()} selected label value {label_value}"
-            + (f", component {component_id}" if component_id else "")
-            + f" in {layer.name}."
-        )
+        mode = self._cleanup_subtab()
+        component_id = None
+        if mode == "components":
+            fast_index = self._fresh_fast_index(layer, sub, indexer)
+            if fast_index is None:
+                self.status_label.setText("Component index is stale or not built. Click Analyze Layer before component picking.")
+                self._log("Component mouse pick skipped because the component index is stale or not built.")
+                return label_value, None
+            component_id = fast_index.component_id_at(scoped_coords)
+            if component_id is not None:
+                self.component_table.select_component_id(component_id)
+        detail = f", component {component_id}" if component_id else ""
+        self.status_label.setText(f"Selected value {label_value}{detail}.")
+        self._log(f"{source.capitalize()} selected label value {label_value}{detail} in {layer.name}.")
         return label_value, component_id
 
     def _open_canvas_context_menu(self, layer, event) -> None:
@@ -408,54 +792,77 @@ class MaskCleanupTab(QWidget):
         if picked is None:
             return
         label_value, component_id = picked
+        mode = self._cleanup_subtab()
         menu = QMenu(self)
-        assign_current_action = None
-        quick_assign_actions = {}
-        if self.canvas_assign_enable_check.isChecked():
+        quick_assign_actions: dict[object, int] = {}
+
+        if mode == "values":
+            relabel_value_action = menu.addAction(f"Relabel clicked value {label_value} to {int(self.new_value_spin.value())}")
+            delete_value_action = menu.addAction(f"Delete clicked value {label_value}")
+            keep_value_action = menu.addAction(f"Keep value {label_value} only")
+            select_action = menu.addAction("Select value row only")
+            selected_action = menu.exec_(self._event_global_position(event))
+            if selected_action == relabel_value_action:
+                self.values_to_replace_edit.setText(str(label_value))
+                self.apply_relabel()
+            elif selected_action == delete_value_action:
+                self._apply_mouse_action(layer, event, "delete_value")
+            elif selected_action == keep_value_action:
+                self._apply_mouse_action(layer, event, "keep_value_only")
+            elif selected_action == select_action:
+                self._select_value_row(label_value)
+            return
+
+        if mode == "components":
+            if component_id is None:
+                self.status_label.setText("Component index is stale or not built. Click Analyze Layer before component actions.")
+                return
             current_value = int(self.assignment_value_spin.value())
-            assign_current_action = menu.addAction(f"Assign clicked object to {current_value}")
+            assign_current_action = menu.addAction(f"Assign indexed component to {current_value}")
             assign_current_action.setToolTip("Relabel only the clicked connected component.")
             quick_menu = menu.addMenu("Assign clicked object to")
             for value in range(1, 7):
                 action = quick_menu.addAction(str(value))
                 action.setToolTip(f"Relabel only the clicked connected component to {value}.")
                 quick_assign_actions[action] = value
-        cut_axon_action = None
-        if self.axon_cut_enable_check.isChecked():
-            if assign_current_action is not None:
-                menu.addSeparator()
-            target_text = (
-                f"class {int(self.axon_value_spin.value())}"
-                if self.axon_assign_class_check.isChecked()
-                else "background"
-            )
-            cut_axon_action = menu.addAction(f"Cut axon from clicked point to {target_text}")
-            cut_axon_action.setToolTip("Grow the dark inner region from the clicked point inside the clicked SAM3 mask.")
-        delete_component_action = None
-        delete_value_action = None
-        if self.mouse_action_enable_check.isChecked():
-            if assign_current_action is not None or cut_axon_action is not None:
-                menu.addSeparator()
-            delete_component_action = menu.addAction("Delete clicked mask component")
+            menu.addSeparator()
+            delete_component_action = menu.addAction("Delete indexed component")
             delete_component_action.setToolTip("Set only the clicked connected component to background.")
-            delete_value_action = menu.addAction(f"Delete all pixels/voxels with value {label_value}")
-            delete_value_action.setToolTip("Set every pixel/voxel with this value to background.")
-        menu.addSeparator()
-        locate_action = menu.addAction("Select table row only")
+            locate_action = menu.addAction("Select table row only")
+            selected_action = menu.exec_(self._event_global_position(event))
+            if selected_action == assign_current_action:
+                self._apply_mouse_action(layer, event, "assign_component")
+            elif selected_action in quick_assign_actions:
+                self.set_assignment_value(quick_assign_actions[selected_action])
+                self._apply_mouse_action(layer, event, "assign_component")
+            elif selected_action == delete_component_action:
+                self._apply_mouse_action(layer, event, "delete_component")
+            elif selected_action == locate_action:
+                self.component_table.select_component_id(component_id)
+            return
+
+        target_text = (
+            f"class {int(self.axon_value_spin.value())}"
+            if self.axon_assign_class_check.isChecked()
+            else "background"
+        )
+        cut_axon_action = menu.addAction(f"Cut axon from clicked point to {target_text}")
+        cut_axon_action.setToolTip("Grow the seed-similar region from the clicked point inside the clicked mask.")
+        assign_local_action = menu.addAction(f"Assign clicked local object to {int(self.assignment_value_spin.value())}")
+        delete_local_action = menu.addAction("Delete clicked local object")
+        delete_value_action = menu.addAction(f"Delete all pixels/voxels with value {label_value}")
+        select_action = menu.addAction("Select value row only")
         selected_action = menu.exec_(self._event_global_position(event))
-        if selected_action == assign_current_action:
-            self._apply_mouse_action(layer, event, "assign_component")
-        elif selected_action in quick_assign_actions:
-            self.set_assignment_value(quick_assign_actions[selected_action])
-            self._apply_mouse_action(layer, event, "assign_component")
-        elif selected_action == cut_axon_action:
+        if selected_action == cut_axon_action:
             self._apply_mouse_action(layer, event, "cut_axon")
-        elif selected_action == delete_component_action:
-            self._apply_mouse_action(layer, event, "delete_component")
+        elif selected_action == assign_local_action:
+            self._apply_mouse_action(layer, event, "assign_local_component")
+        elif selected_action == delete_local_action:
+            self._apply_mouse_action(layer, event, "delete_local_component")
         elif selected_action == delete_value_action:
             self._apply_mouse_action(layer, event, "delete_value")
-        elif selected_action == locate_action and component_id is not None:
-            self.component_table.select_component_id(component_id)
+        elif selected_action == select_action:
+            self._select_value_row(label_value)
 
     def _apply_mouse_action(self, layer, event, action: str) -> None:
         coords = self._event_data_coords(layer, event)
@@ -507,15 +914,37 @@ class MaskCleanupTab(QWidget):
             invalidate_fast_index = True
             target_text = f"class {output_value}" if output_value else "background"
             message = f"Cut clicked axon region to {target_text} ({axon_pixels} pixel(s)/voxel(s))"
+        elif action in {"assign_local_component", "delete_local_component"}:
+            component_mask = self.cleanup.connected_label_mask(sub, scoped_coords, label_value)
+            data = sub.copy()
+            if action == "assign_local_component":
+                new_value = int(self.assignment_value_spin.value())
+                changed = int(np.count_nonzero(component_mask & (data != new_value)))
+                data[component_mask] = new_value
+                message = f"Assigned clicked local object from value {label_value} to {new_value}"
+            else:
+                changed = int(np.count_nonzero(component_mask & (data != 0)))
+                data[component_mask] = 0
+                message = f"Deleted clicked local object with value {label_value}"
+            invalidate_fast_index = True
+        elif action == "delete_value":
+            data, changed = self.cleanup.delete_values(sub, [label_value])
+            invalidate_fast_index = True
+            message = f"Deleted clicked value {label_value}"
+        elif action == "keep_value_only":
+            data, changed = self.cleanup.keep_values(sub, [label_value])
+            invalidate_fast_index = True
+            message = f"Kept clicked value {label_value} only"
         else:
-            fast_index = self._ensure_fast_index(layer, sub, indexer)
+            fast_index = self._fresh_fast_index(layer, sub, indexer)
+            if fast_index is None:
+                self._log("Component index is stale or not built. Click Analyze Layer before component actions.")
+                self.status_label.setText("Component index is stale or not built. Click Analyze Layer before component actions.")
+                return
             component_id = fast_index.component_id_at(scoped_coords)
             invalidate_fast_index = False
 
-            if action == "delete_value":
-                data, changed = fast_index.delete_label_value(sub, label_value)
-                message = f"Deleted clicked value {label_value}"
-            elif action == "assign_component":
+            if action == "assign_component":
                 if component_id is None:
                     self._log("Clicked mask component is not indexed. Click Analyze Layer / Rebuild Index and try again.")
                     return
@@ -528,10 +957,6 @@ class MaskCleanupTab(QWidget):
                     return
                 data, changed = fast_index.delete_components(sub, [component_id])
                 message = f"Deleted clicked component {component_id} from value {label_value}"
-            elif action == "keep_value_only":
-                data, changed = self.cleanup.keep_values(sub, [label_value])
-                invalidate_fast_index = True
-                message = f"Kept clicked value {label_value} only"
             else:
                 return
 
@@ -543,13 +968,11 @@ class MaskCleanupTab(QWidget):
             invalidate_fast_index=invalidate_fast_index,
         ):
             self._log(f"{message} in {layer.name} ({self._scope_label(layer)}; {changed} pixel(s)/voxel(s)).")
-            if action == "cut_axon":
+            if action in {"cut_axon", "assign_local_component", "delete_local_component", "delete_value", "keep_value_only"}:
                 self._invalidate_fast_index()
                 self.refresh_unique_values()
                 self._refresh_all()
-                self.status_label.setText(f"{message}.")
-            elif invalidate_fast_index:
-                self.analyze_layer()
+                self.status_label.setText(f"{message}. Component table is stale; click Analyze Layer to rebuild.")
             else:
                 self.component_table.set_records(fast_index.active_records())
                 self.refresh_unique_values()
@@ -578,10 +1001,23 @@ class MaskCleanupTab(QWidget):
             )
         return self._fast_index
 
+    def _fresh_fast_index(self, layer, sub: np.ndarray, indexer: object) -> FastComponentIndex | None:
+        scope_key = self._scope_key(layer, indexer)
+        if (
+            self._component_index_stale
+            or self._fast_index is None
+            or self._fast_index_layer_id != id(layer)
+            or self._fast_index_scope_key != scope_key
+            or self._fast_index.shape != tuple(sub.shape)
+        ):
+            return None
+        return self._fast_index
+
     def _invalidate_fast_index(self) -> None:
         self._fast_index = None
         self._fast_index_layer_id = None
         self._fast_index_scope_key = None
+        self._component_index_stale = True
 
     def _scope_key(self, layer, indexer: object) -> tuple:
         if indexer is Ellipsis:
@@ -603,18 +1039,13 @@ class MaskCleanupTab(QWidget):
     def _event_global_position(self, event):
         """Return a reliable global Qt position for a napari canvas mouse event."""
         native = getattr(event, "native", None)
-        canvas = getattr(getattr(self.viewer, "window", None), "qt_viewer", None)
-        canvas = getattr(canvas, "canvas", None)
-        widget = getattr(canvas, "native", None)
-        if native is not None and widget is not None:
-            for attr in ("position", "pos"):
+        if native is not None:
+            for attr in ("globalPosition", "globalPos"):
                 try:
                     pos = getattr(native, attr)()
                     if hasattr(pos, "toPoint"):
-                        pos = pos.toPoint()
-                    elif not isinstance(pos, QPoint):
-                        pos = QPoint(int(pos.x()), int(pos.y()))
-                    return widget.mapToGlobal(pos)
+                        return pos.toPoint()
+                    return pos
                 except Exception:
                     pass
         return QCursor.pos()
@@ -696,7 +1127,9 @@ class MaskCleanupTab(QWidget):
         layer = self._target_layer()
         if layer is None:
             return None
-        fast_index = self._ensure_fast_index(layer, sub, self._last_analysis_indexer)
+        fast_index = self._fresh_fast_index(layer, sub, self._last_analysis_indexer)
+        if fast_index is None:
+            return None
         component_id = fast_index.component_id_at(scoped_coords)
         if component_id is not None:
             self.component_table.select_component_id(component_id)
@@ -752,12 +1185,7 @@ class MaskCleanupTab(QWidget):
         self.axon_cut_enable_check.toggled.connect(lambda _checked: self._sync_mouse_action_callback())
         target_row = QHBoxLayout()
         target_row.addWidget(refresh_btn)
-        target_row.addWidget(analyze_btn)
-        target_row.addWidget(delete_btn)
         target_row.addWidget(self.undo_btn)
-        target_row.addWidget(self.canvas_assign_enable_check)
-        target_row.addWidget(self.mouse_action_enable_check)
-        target_row.addWidget(self.axon_cut_enable_check)
         target_form.addRow("Target labels layer", self.target_combo)
         target_form.addRow("Source image layer", self.source_image_combo)
         target_form.addRow("Operation scope", self.scope_combo)
@@ -765,11 +1193,32 @@ class MaskCleanupTab(QWidget):
         target_form.addRow(target_row)
         root.addLayout(target_form)
 
+        self.cleanup_tabs = QTabWidget()
+        self.cleanup_tabs.currentChanged.connect(lambda _index: self._on_cleanup_subtab_changed())
+        components_tab = QWidget()
+        components_layout = QVBoxLayout()
+        components_tab.setLayout(components_layout)
+        local_tab = QWidget()
+        local_layout = QVBoxLayout()
+        local_tab.setLayout(local_layout)
+        values_tab = QWidget()
+        values_layout = QVBoxLayout()
+        values_tab.setLayout(values_layout)
+        self.cleanup_tabs.addTab(components_tab, "Components")
+        self.cleanup_tabs.addTab(local_tab, "Local Edit")
+        self.cleanup_tabs.addTab(values_tab, "Values")
+        root.addWidget(self.cleanup_tabs)
+
         self.analysis_progress = QProgressBar()
         self.analysis_progress.setRange(0, 100)
         self.analysis_progress.setValue(0)
         self.analysis_progress.setFormat("Component analysis idle")
-        root.addWidget(self.analysis_progress)
+        components_header = QHBoxLayout()
+        components_header.addWidget(analyze_btn)
+        components_header.addWidget(delete_btn)
+        components_header.addStretch(1)
+        components_layout.addLayout(components_header)
+        components_layout.addWidget(self.analysis_progress)
 
         self.component_table = ComponentTableWidget(
             delete_callback=self.delete_selected_components,
@@ -777,7 +1226,7 @@ class MaskCleanupTab(QWidget):
             locate_callback=self.locate_component,
         )
         self.component_table.setMinimumHeight(170)
-        root.addWidget(self.component_table)
+        components_layout.addWidget(self.component_table)
 
         assignment = QHBoxLayout()
         assignment.addWidget(QLabel("Assignment value"))
@@ -797,6 +1246,13 @@ class MaskCleanupTab(QWidget):
         assignment.addWidget(assign_selected_btn)
         assignment.addStretch(1)
         root.addLayout(assignment)
+
+        local_mouse_row = QHBoxLayout()
+        local_mouse_row.addWidget(self.axon_cut_enable_check)
+        local_mouse_row.addWidget(self.canvas_assign_enable_check)
+        local_mouse_row.addWidget(self.mouse_action_enable_check)
+        local_mouse_row.addStretch(1)
+        local_layout.addLayout(local_mouse_row)
 
         self.min_size_spin = QSpinBox()
         self.min_size_spin.setRange(1, 2_147_483_647)
@@ -823,7 +1279,7 @@ class MaskCleanupTab(QWidget):
         self._add_operation_row(operations, 2, "Smoothing radius", self.smoothing_spin, smooth_btn)
         operations.addWidget(keep_btn, 3, 2)
         operations.setColumnStretch(2, 1)
-        root.addLayout(operations)
+        components_layout.addLayout(operations)
 
         axon_row = QHBoxLayout()
         axon_row.addWidget(QLabel("Seed tolerance %"))
@@ -851,7 +1307,145 @@ class MaskCleanupTab(QWidget):
         self.axon_value_spin.setToolTip("Class value used when Assign axon class is enabled.")
         axon_row.addWidget(self.axon_value_spin)
         axon_row.addStretch(1)
-        root.addLayout(axon_row)
+        local_layout.addLayout(axon_row)
+
+        batch_row = QHBoxLayout()
+        self.batch_preview_btn = QPushButton("Preview Batch Axons")
+        self.batch_preview_btn.setToolTip(
+            "Scan the current scope for myelinated objects and create proposed axon holes. "
+            "This only updates the preview layer and table; it does not edit the target labels."
+        )
+        self.batch_preview_btn.clicked.connect(self.preview_batch_axons)
+        self.batch_apply_btn = QPushButton("Apply Confident")
+        self.batch_apply_btn.setToolTip(
+            "Apply all non-skipped proposals whose confidence is at or above Min confidence %. "
+            "This edits the target labels and can be undone with Undo Last Edit."
+        )
+        self.batch_apply_btn.clicked.connect(self.apply_confident_batch_axons)
+        self.batch_apply_selected_btn = QPushButton("Apply Selected")
+        self.batch_apply_selected_btn.setToolTip(
+            "Apply only the selected proposal rows, even if they are below Min confidence %. "
+            "Use this after visually checking specific rows."
+        )
+        self.batch_apply_selected_btn.clicked.connect(self.apply_selected_batch_axons)
+        self.batch_locate_btn = QPushButton("Locate Selected")
+        self.batch_locate_btn.setToolTip(
+            "Center the napari view on the selected proposal and show its preview layer. "
+            "This does not edit labels."
+        )
+        self.batch_locate_btn.clicked.connect(self.locate_selected_batch_axon)
+        self.batch_fill_selected_btn = QPushButton("Fill Selected Holes")
+        self.batch_fill_selected_btn.setToolTip(
+            "Repair selected proposals by filling holes inside the proposed axon mask. "
+            "Use when the preview axon contains small myelin/noise gaps; this updates the preview only."
+        )
+        self.batch_fill_selected_btn.clicked.connect(self.fill_selected_batch_axon_holes)
+        self.batch_skip_selected_btn = QPushButton("Skip Selected")
+        self.batch_skip_selected_btn.setToolTip(
+            "Mark selected proposals as skipped and remove them from the preview. "
+            "Skipped proposals are not applied by Apply Confident."
+        )
+        self.batch_skip_selected_btn.clicked.connect(self.skip_selected_batch_axons)
+        self.batch_skip_low_btn = QPushButton("Skip Low Confidence")
+        self.batch_skip_low_btn.setToolTip(
+            "Mark all proposals below Min confidence % as skipped and remove them from the preview. "
+            "Use this to hide obvious uncertain candidates before reviewing the rest."
+        )
+        self.batch_skip_low_btn.clicked.connect(self.skip_low_confidence_batch_axons)
+        self.batch_select_visible_btn = QPushButton("Select Visible")
+        self.batch_select_visible_btn.setToolTip("Select every currently visible table row after sorting or filtering.")
+        self.batch_select_visible_btn.clicked.connect(self.select_visible_batch_axons)
+        self.batch_export_selected_btn = QPushButton("Export Selected")
+        self.batch_export_selected_btn.setToolTip(
+            "Create a new Labels layer from the selected proposal masks. "
+            "This does not edit the target labels."
+        )
+        self.batch_export_selected_btn.clicked.connect(self.export_selected_batch_axon_layer)
+        batch_row.addWidget(self.batch_preview_btn)
+        batch_row.addWidget(self.batch_apply_btn)
+        batch_row.addWidget(self.batch_apply_selected_btn)
+        batch_row.addWidget(self.batch_locate_btn)
+        batch_row.addWidget(self.batch_fill_selected_btn)
+        batch_row.addWidget(self.batch_skip_selected_btn)
+        batch_row.addWidget(self.batch_skip_low_btn)
+        batch_row.addWidget(self.batch_select_visible_btn)
+        batch_row.addWidget(self.batch_export_selected_btn)
+        batch_row.addWidget(QLabel("Min object"))
+        self.batch_min_object_spin = QSpinBox()
+        self.batch_min_object_spin.setRange(1, 2_147_483_647)
+        self.batch_min_object_spin.setValue(32)
+        self.batch_min_object_spin.setToolTip(
+            "Ignore candidate objects smaller than this many pixels/voxels during batch preview."
+        )
+        batch_row.addWidget(self.batch_min_object_spin)
+        batch_row.addWidget(QLabel("Min confidence %"))
+        self.batch_min_confidence_spin = QSpinBox()
+        self.batch_min_confidence_spin.setRange(0, 100)
+        self.batch_min_confidence_spin.setValue(70)
+        self.batch_min_confidence_spin.setToolTip(
+            "Confidence cutoff used by Apply Confident and Skip Low Confidence. "
+            "Lower values apply more proposals; higher values are more conservative."
+        )
+        batch_row.addWidget(self.batch_min_confidence_spin)
+        batch_row.addWidget(QLabel("ROI shape"))
+        self.batch_roi_combo = QComboBox()
+        self.batch_roi_combo.setToolTip("Optional Shapes layer; candidates are limited to objects whose seed is inside the ROI bbox.")
+        batch_row.addWidget(self.batch_roi_combo)
+        batch_row.addStretch(1)
+        local_layout.addLayout(batch_row)
+
+        batch_status_row = QHBoxLayout()
+        for status in ("confident", "review", "failed", "skipped"):
+            select_btn = QPushButton(f"Select {status.title()}")
+            select_btn.setToolTip(f"Select all visible proposal rows with status {status}.")
+            select_btn.clicked.connect(lambda _checked=False, status=status: self.select_batch_axons_by_status(status))
+            export_btn = QPushButton(f"Export {status.title()}")
+            export_btn.setToolTip(f"Create a new Labels layer containing proposal masks with status {status}.")
+            export_btn.clicked.connect(lambda _checked=False, status=status: self.export_batch_axon_layer_by_status(status))
+            batch_status_row.addWidget(select_btn)
+            batch_status_row.addWidget(export_btn)
+        batch_status_row.addStretch(1)
+        local_layout.addLayout(batch_status_row)
+
+        self.batch_axon_table = QTableWidget(0, 7)
+        self.batch_axon_table.setHorizontalHeaderLabels(
+            ["Status", "Object", "Confidence", "Axon px", "Object px", "Axon %", "Reason"]
+        )
+        self.batch_axon_table.setAlternatingRowColors(True)
+        self.batch_axon_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.batch_axon_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.batch_axon_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.batch_axon_table.setSortingEnabled(True)
+        self.batch_axon_table.cellClicked.connect(self.locate_batch_axon_from_cell)
+        self.batch_axon_table.verticalHeader().setDefaultSectionSize(24)
+        self.batch_axon_table.verticalHeader().setMinimumSectionSize(22)
+        self.batch_axon_table.setMinimumHeight(140)
+        self.batch_axon_table.setStyleSheet(
+            """
+            QTableWidget {
+                background: #1f242c;
+                alternate-background-color: #2a3038;
+                color: #eef2f7;
+                gridline-color: #3b444f;
+                selection-background-color: #2f6f8f;
+                selection-color: #ffffff;
+            }
+            QTableWidget::item {
+                padding: 3px 4px;
+            }
+            QTableWidget::item:selected {
+                background: #2f6f8f;
+                color: #ffffff;
+            }
+            QHeaderView::section {
+                background: #303741;
+                color: #f4f7fb;
+                border: 1px solid #3b444f;
+                padding: 3px 4px;
+            }
+            """
+        )
+        local_layout.addWidget(self.batch_axon_table)
 
         self.unique_values_table = QTableWidget(0, 2)
         self.unique_values_table.setObjectName("maskValueTable")
@@ -880,7 +1474,7 @@ class MaskCleanupTab(QWidget):
             }
             """
         )
-        root.addWidget(self.unique_values_table)
+        values_layout.addWidget(self.unique_values_table)
         self.status_label = QLabel("Canvas assignment/delete tools are off.")
         root.addWidget(self.status_label)
         relabel_form = QFormLayout()
@@ -908,7 +1502,7 @@ class MaskCleanupTab(QWidget):
         relabel_buttons.addWidget(keep_values_btn)
         relabel_buttons.addWidget(convert_btn)
         relabel_form.addRow(relabel_buttons)
-        root.addLayout(relabel_form)
+        values_layout.addLayout(relabel_form)
         self.setLayout(root)
 
     def _add_operation_row(self, layout: QGridLayout, row: int, label_text: str, spin_box: QSpinBox, button: QPushButton) -> None:
@@ -920,6 +1514,25 @@ class MaskCleanupTab(QWidget):
         layout.addWidget(spin_box, row, 1)
         layout.addWidget(button, row, 2)
 
+    def _cleanup_subtab(self) -> str:
+        tabs = getattr(self, "cleanup_tabs", None)
+        if tabs is None:
+            return "components"
+        return {0: "components", 1: "local", 2: "values"}.get(int(tabs.currentIndex()), "components")
+
+    def _on_cleanup_subtab_changed(self) -> None:
+        self._sync_mouse_action_callback()
+        if hasattr(self, "status_label"):
+            self.status_label.setText(self._mouse_mode_status())
+
+    def _mouse_mode_status(self) -> str:
+        mode = self._cleanup_subtab()
+        if mode == "local":
+            return "Mouse mode: Local Edit. Click tools use local flood-fill and do not rebuild the component table."
+        if mode == "components":
+            return "Mouse mode: Components. Requires a fresh Analyze Layer index for component row selection/actions."
+        return "Mouse mode: Values. Clicks select or edit label values without component analysis."
+
     def _apply_scoped_cleanup(self, callback, success_prefix: str, action: str) -> None:
         layer = self._target_layer()
         if layer is None:
@@ -929,9 +1542,9 @@ class MaskCleanupTab(QWidget):
         data = callback(sub)
         if self._replace_scoped_layer_data(layer, data, indexer, action):
             self._log(f"{success_prefix} in {layer.name} ({self._scope_label(layer)}).")
-            self.analyze_layer()
             self.refresh_unique_values()
             self._refresh_all()
+            self.status_label.setText(f"{success_prefix}. Component table is stale; click Analyze Layer to rebuild.")
         else:
             self._log(f"{action} made no mask changes.")
 
@@ -940,6 +1553,7 @@ class MaskCleanupTab(QWidget):
 
     def _on_target_layer_changed(self, _index: int) -> None:
         self._invalidate_fast_index()
+        self.component_table.set_records([])
         self._sync_scope_controls()
         self.refresh_unique_values()
         self._track_target_layer()
@@ -1087,12 +1701,11 @@ class MaskCleanupTab(QWidget):
             self._suppress_history_event = False
         self._invalidate_fast_index()
         self._log(f"Undid last Mask Cleanup edit on {layer.name}.")
-        self.component_table.set_records([])
         self.refresh_unique_values()
         self._refresh_all()
-        self.status_label.setText(f"Undo restored {layer.name}. Click Analyze Layer to rebuild the component table.")
+        self.status_label.setText(f"Undo restored {layer.name}. Component table is stale; click Analyze Layer to rebuild.")
         self.analysis_progress.setValue(0)
-        self.analysis_progress.setFormat("Undo complete - analysis index cleared")
+        self.analysis_progress.setFormat("Undo complete - component index stale")
         self._update_undo_state()
 
     def _replace_layer_data(self, layer, data, action: str, *, invalidate_fast_index: bool = True) -> bool:
@@ -1190,7 +1803,10 @@ class MaskCleanupTab(QWidget):
             self._log("Select a target Labels layer before locating a component.")
             return
         sub, indexer, _offset = self._scoped_data(layer)
-        fast_index = self._ensure_fast_index(layer, sub, indexer)
+        fast_index = self._fresh_fast_index(layer, sub, indexer)
+        if fast_index is None:
+            self._log("Component index is stale or not built. Click Analyze Layer before locating components.")
+            return
         mask = fast_index.component_mask(component_id)
         record = fast_index.record(component_id)
         if mask is None or record is None:

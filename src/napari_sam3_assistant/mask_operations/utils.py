@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-from napari.layers import Image, Labels
+from napari.layers import Image, Labels, Shapes
 
 
 ACCEPTED_ROLE = "accepted_object"
@@ -30,6 +30,16 @@ def image_layer_names(viewer: Any) -> list[str]:
     if viewer is None:
         return []
     return [layer.name for layer in viewer.layers if is_image_layer(layer)]
+
+
+def is_shapes_layer(layer: Any) -> bool:
+    return isinstance(layer, Shapes)
+
+
+def shapes_layer_names(viewer: Any) -> list[str]:
+    if viewer is None:
+        return []
+    return [layer.name for layer in viewer.layers if is_shapes_layer(layer)]
 
 
 def labels_layer_names(viewer: Any) -> list[str]:
