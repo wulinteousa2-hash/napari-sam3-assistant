@@ -26,6 +26,7 @@ Version 4.2.9 adds batch local exemplar segmentation for large 2D images. Pick o
 - Added `Scan Full Image by Tiles` for Advanced `Exemplar segmentation` when large-image local inference is enabled.
 - The local ROI size becomes the tile size, so a 6k x 6k image can be processed as many smaller SAM3 calls instead of one oversized inference.
 - Added `Tile overlap` control, default `15%`, to reduce edge misses between neighboring tiles.
+- Added `Merge seam-split objects`, enabled by default, to reconnect objects cut by straight tile boundaries after stitching.
 - Composed all tile results into `SAM3 tiled exemplar labels` with full original image shape.
 - Renamed the normal run action in this mode to `Run Current ROI Only`, making the difference between one local test tile and full-image scanning clear.
 - Added clearer progress and output naming so users can tell whether they ran a single ROI or a full tiled scan.

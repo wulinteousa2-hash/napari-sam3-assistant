@@ -737,6 +737,14 @@ class AdvancedModePanel(QWidget):
             "Overlap helps objects near tile edges."
         )
 
+        self.merge_tile_seams_check = QCheckBox("Merge seam-split objects")
+        self.merge_tile_seams_check.setChecked(True)
+        self.merge_tile_seams_check.setEnabled(False)
+        self.merge_tile_seams_check.setToolTip(
+            "After tiled exemplar scanning, reconnect labels that were split by "
+            "straight tile boundaries. This checks only narrow tile seam bands."
+        )
+
         self.channel_axis_spin = QSpinBox()
         self.channel_axis_spin.setRange(-1, 8)
         self.channel_axis_spin.setValue(-1)
@@ -771,6 +779,7 @@ class AdvancedModePanel(QWidget):
         task_layout.addRow("", self.large_image_check)
         task_layout.addRow("ROI size", self.roi_size_combo)
         task_layout.addRow("Tile overlap", self.tile_overlap_spin)
+        task_layout.addRow("", self.merge_tile_seams_check)
 
         advanced_content = QWidget()
         advanced_layout = QFormLayout()
@@ -1221,6 +1230,9 @@ class AdvancedModePanel(QWidget):
         if hasattr(self, "tile_overlap_spin"):
             self.tile_overlap_spin.setEnabled(large_image_enabled)
             self.tile_overlap_spin.setVisible(large_image_enabled)
+        if hasattr(self, "merge_tile_seams_check"):
+            self.merge_tile_seams_check.setEnabled(large_image_enabled)
+            self.merge_tile_seams_check.setVisible(large_image_enabled)
         if hasattr(self, "_roi_size_row_label") and self._roi_size_row_label is not None:
             self._roi_size_row_label.setVisible(large_image_enabled)
         if hasattr(self, "_tile_overlap_row_label") and self._tile_overlap_row_label is not None:
@@ -1640,6 +1652,7 @@ class AdvancedModePanel(QWidget):
         image_hw = self._selection_image_hw(bundle.image)
         roi_hw = self._selected_roi_size()
         overlap_fraction = float(self.tile_overlap_spin.value()) / 100.0
+        merge_tile_seams = bool(self.merge_tile_seams_check.isChecked())
         tiles = self._tile_bounds_for_image(image_hw, roi_hw, overlap_fraction)
         if not tiles:
             self._log("No tiles were generated for the selected image.")
@@ -1686,6 +1699,14 @@ class AdvancedModePanel(QWidget):
                     bounds,
                     next_object_id,
                 )
+            seam_merge_count = 0
+            if merge_tile_seams:
+                composed, seam_merge_count = self._merge_tile_seam_labels(
+                    composed,
+                    tiles,
+                    dilation_px=2,
+                    min_contact_pixels=8,
+                )
             result = Sam3Result(
                 task=Sam3Task.EXEMPLAR,
                 labels=composed,
@@ -1697,6 +1718,10 @@ class AdvancedModePanel(QWidget):
                     "tile_count": total,
                     "tile_size": roi_hw,
                     "tile_overlap_percent": int(self.tile_overlap_spin.value()),
+                    "tile_seam_merge_enabled": merge_tile_seams,
+                    "tile_seam_merge_count": seam_merge_count,
+                    "tile_seam_merge_dilation_px": 2,
+                    "tile_seam_merge_min_contact_pixels": 8,
                     "result_space": "global_image",
                 },
             )
@@ -1708,7 +1733,8 @@ class AdvancedModePanel(QWidget):
         self._start_worker(worker)
         self._log(
             f"Started full-image tiled exemplar scan: {len(tiles)} tile(s), "
-            f"tile size {roi_hw[1]} x {roi_hw[0]}, overlap {self.tile_overlap_spin.value()}%."
+            f"tile size {roi_hw[1]} x {roi_hw[0]}, overlap {self.tile_overlap_spin.value()}%, "
+            f"seam merge {'ON' if merge_tile_seams else 'OFF'}."
         )
 
     def _collect_bundle_for_tiled_exemplar(self) -> PromptBundle:
@@ -1840,6 +1866,144 @@ class AdvancedModePanel(QWidget):
             target[write_mask] = int(next_object_id)
             next_object_id += 1
         return next_object_id
+
+    def _merge_tile_seam_labels(
+        self,
+        labels: np.ndarray,
+        tiles: list[RoiBounds],
+        dilation_px: int = 2,
+        min_contact_pixels: int = 8,
+    ) -> tuple[np.ndarray, int]:
+        label_data = np.asarray(labels, dtype=np.uint32)
+        if label_data.ndim != 2 or not tiles:
+            return label_data, 0
+
+        height, width = label_data.shape
+        vertical_boundaries = sorted({
+            int(value)
+            for bounds in tiles
+            for value in (bounds.x0, bounds.x1)
+            if 0 < int(value) < width
+        })
+        horizontal_boundaries = sorted({
+            int(value)
+            for bounds in tiles
+            for value in (bounds.y0, bounds.y1)
+            if 0 < int(value) < height
+        })
+        if not vertical_boundaries and not horizontal_boundaries:
+            return label_data, 0
+
+        parent: dict[int, int] = {}
+
+        def find(value: int) -> int:
+            parent.setdefault(value, value)
+            while parent[value] != value:
+                parent[value] = parent[parent[value]]
+                value = parent[value]
+            return value
+
+        def union(a: int, b: int) -> None:
+            root_a = find(a)
+            root_b = find(b)
+            if root_a != root_b:
+                parent[max(root_a, root_b)] = min(root_a, root_b)
+
+        for x in vertical_boundaries:
+            for (a, b), count in self._vertical_seam_label_pairs(label_data, x, dilation_px).items():
+                if count >= min_contact_pixels:
+                    union(a, b)
+        for y in horizontal_boundaries:
+            for (a, b), count in self._horizontal_seam_label_pairs(label_data, y, dilation_px).items():
+                if count >= min_contact_pixels:
+                    union(a, b)
+
+        merge_groups = {
+            find(value)
+            for value in parent
+            if find(value) != value or any(find(other) == value and other != value for other in parent)
+        }
+        if not merge_groups:
+            return label_data, 0
+
+        values = np.unique(label_data)
+        values = values[values != 0]
+        root_to_output: dict[int, int] = {}
+        mapping = np.zeros(int(values.max()) + 1, dtype=np.uint32)
+        next_id = 1
+        for value in values:
+            root = find(int(value))
+            if root not in root_to_output:
+                root_to_output[root] = next_id
+                next_id += 1
+            mapping[int(value)] = root_to_output[root]
+        return mapping[label_data], len(merge_groups)
+
+    def _vertical_seam_label_pairs(
+        self,
+        labels: np.ndarray,
+        x: int,
+        dilation_px: int,
+    ) -> dict[tuple[int, int], int]:
+        height, width = labels.shape
+        max_gap = max(0, int(dilation_px))
+        counts: dict[tuple[int, int], int] = {}
+        left_columns = range(max(0, x - max_gap - 1), x)
+        right_columns = range(x, min(width, x + max_gap + 1))
+        for left_x in left_columns:
+            for right_x in right_columns:
+                for dy in range(-max_gap, max_gap + 1):
+                    if dy >= 0:
+                        left = labels[: height - dy, left_x]
+                        right = labels[dy:, right_x]
+                    else:
+                        left = labels[-dy:, left_x]
+                        right = labels[: height + dy, right_x]
+                    self._accumulate_label_pair_counts(counts, left, right)
+        return counts
+
+    def _horizontal_seam_label_pairs(
+        self,
+        labels: np.ndarray,
+        y: int,
+        dilation_px: int,
+    ) -> dict[tuple[int, int], int]:
+        height, width = labels.shape
+        max_gap = max(0, int(dilation_px))
+        counts: dict[tuple[int, int], int] = {}
+        top_rows = range(max(0, y - max_gap - 1), y)
+        bottom_rows = range(y, min(height, y + max_gap + 1))
+        for top_y in top_rows:
+            for bottom_y in bottom_rows:
+                for dx in range(-max_gap, max_gap + 1):
+                    if dx >= 0:
+                        top = labels[top_y, : width - dx]
+                        bottom = labels[bottom_y, dx:]
+                    else:
+                        top = labels[top_y, -dx:]
+                        bottom = labels[bottom_y, : width + dx]
+                    self._accumulate_label_pair_counts(counts, top, bottom)
+        return counts
+
+    def _accumulate_label_pair_counts(
+        self,
+        counts: dict[tuple[int, int], int],
+        a: np.ndarray,
+        b: np.ndarray,
+    ) -> None:
+        valid = (a != 0) & (b != 0) & (a != b)
+        if not np.any(valid):
+            return
+        aa = np.asarray(a[valid], dtype=np.uint64)
+        bb = np.asarray(b[valid], dtype=np.uint64)
+        low = np.minimum(aa, bb)
+        high = np.maximum(aa, bb)
+        keys, key_counts = np.unique((low << np.uint64(32)) | high, return_counts=True)
+        for key, count in zip(keys, key_counts, strict=False):
+            packed = int(key)
+            label_a = packed >> 32
+            label_b = packed & 0xFFFFFFFF
+            counts[(label_a, label_b)] = counts.get((label_a, label_b), 0) + int(count)
 
     def _video_roi_bounds_for_bundle(self, bundle: PromptBundle) -> RoiBounds | None:
         if not self._large_image_mode_enabled():
@@ -2094,6 +2258,9 @@ class AdvancedModePanel(QWidget):
             tile_count = int(result.metadata.get("tile_count") or 0)
             nonzero = int(np.count_nonzero(result.labels)) if result.labels is not None else 0
             self._log(f"Tiled exemplar scan wrote {nonzero} labeled pixel(s) from {tile_count} tile(s).")
+            if result.metadata.get("tile_seam_merge_enabled"):
+                merge_count = int(result.metadata.get("tile_seam_merge_count") or 0)
+                self._log(f"Tile seam merge reconnected {merge_count} split object group(s).")
         self._log_large_image_result_guidance(result)
         self._log_text_result_guidance(result)
 
