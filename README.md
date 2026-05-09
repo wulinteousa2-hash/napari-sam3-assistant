@@ -17,22 +17,18 @@ The plugin focuses on task-based segmentation workflows:
 
 
 
-## What's New in 4.2.8
+## What's New in 4.2.9
 
-Version 4.2.8 polishes the post-SAM myelin cleanup workflow with an actionable batch axon review table and clearer local-edit controls.
+Version 4.2.9 adds batch local exemplar segmentation for large 2D images. Pick one exemplar ROI, enable large-image local inference, then let SAM3 scan the full image tile by tile and compose the result back into one full-size labels layer.
 
-- Added an axon hole click tool in `Mask Cleanup / Multiclass`: select the original source image, enable the tool, then click inside the axon region of a SAM mask to set that connected seed-similar region to background or an axon class.
-- Split Mask Cleanup into internal `Local Edit`, `Components`, and `Values` sections so fast canvas correction, full component-table review, and class/value remapping are easier to understand.
-- Added preview-first batch axon hole proposals in `Local Edit`, including an actionable proposal table, optional ROI Shapes layer filtering, a preview labels layer, row-click locate, selected-row apply/skip, and selected proposal hole filling.
-- Added sortable batch proposal columns plus selected/status export actions so confident, review, failed, skipped, or custom-selected axon proposals can be written to separate preview layers before applying edits.
-- Added table actions and tooltips for locating proposals, applying selected proposals, filling selected axon holes, skipping low-confidence proposals, and exporting review groups.
-- Added `Seed tolerance %`, `Max axon %`, and optional axon class assignment controls for tuning ring-only or two-class myelin/axon labels.
-- Changed axon cutting to use seed-similar intensity instead of assuming the axon is dark, so it can work when the axon is brighter or darker than the surrounding myelin rim.
-- Added visible progress reporting when `Analyze Layer` builds the Mask Cleanup component index.
-- Made `Undo Last Edit` more responsive by restoring the previous mask immediately and clearing the stale component table/index instead of re-analyzing automatically.
-- Made local and value edits mark the component table stale instead of silently rebuilding the full component index; users explicitly click `Analyze Layer` when they need the global component list refreshed.
-- Removed deprecated `viewer.window.qt_viewer` access from canvas context-menu positioning.
-- Fixed an axon-click `NameError` and a napari/vispy `EventEmitter loop detected` crash caused by re-entering the event loop during canvas mouse handling.
+![Batch local exemplar segmentation scans large images tile by tile](docs/tiled_exemplar_scan.png)
+
+- Added `Scan Full Image by Tiles` for Advanced `Exemplar segmentation` when large-image local inference is enabled.
+- The local ROI size becomes the tile size, so a 6k x 6k image can be processed as many smaller SAM3 calls instead of one oversized inference.
+- Added `Tile overlap` control, default `15%`, to reduce edge misses between neighboring tiles.
+- Composed all tile results into `SAM3 tiled exemplar labels` with full original image shape.
+- Renamed the normal run action in this mode to `Run Current ROI Only`, making the difference between one local test tile and full-image scanning clear.
+- Added clearer progress and output naming so users can tell whether they ran a single ROI or a full tiled scan.
 
 
 ## What's New in 4.2.0

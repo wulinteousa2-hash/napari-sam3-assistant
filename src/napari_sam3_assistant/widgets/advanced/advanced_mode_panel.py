@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 import numpy as np
+from scipy import ndimage as ndi
 from napari import current_viewer
 from napari.layers import Image, Labels, Points, Shapes
 from napari.qt.threading import thread_worker
@@ -65,7 +66,7 @@ from ...device_utils import (
     normalize_requested_device,
     runtime_device,
 )
-from ...core.models import PromptBundle, Sam3Result, Sam3Session, Sam3Task
+from ...core.models import BoxPrompt, PromptBundle, Sam3Result, Sam3Session, Sam3Task
 from ...core.diagnostics import Sam3Diagnostics
 from ...providers.sam3_repo_provider import Sam3RepoProvider
 from ...services.checkpoint_service import CheckpointService
@@ -726,6 +727,16 @@ class AdvancedModePanel(QWidget):
         self.roi_size_combo.setEnabled(False)
         self.roi_size_combo.currentIndexChanged.connect(self._on_large_image_mode_changed)
 
+        self.tile_overlap_spin = QSpinBox()
+        self.tile_overlap_spin.setRange(0, 50)
+        self.tile_overlap_spin.setValue(15)
+        self.tile_overlap_spin.setSuffix("%")
+        self.tile_overlap_spin.setEnabled(False)
+        self.tile_overlap_spin.setToolTip(
+            "Overlap between local tiles for full-image tiled exemplar scans. "
+            "Overlap helps objects near tile edges."
+        )
+
         self.channel_axis_spin = QSpinBox()
         self.channel_axis_spin.setRange(-1, 8)
         self.channel_axis_spin.setValue(-1)
@@ -759,6 +770,7 @@ class AdvancedModePanel(QWidget):
         task_layout.addRow("", self.batch_all_images_check)
         task_layout.addRow("", self.large_image_check)
         task_layout.addRow("ROI size", self.roi_size_combo)
+        task_layout.addRow("Tile overlap", self.tile_overlap_spin)
 
         advanced_content = QWidget()
         advanced_layout = QFormLayout()
@@ -780,6 +792,7 @@ class AdvancedModePanel(QWidget):
 
         self._task_setup_form = task_layout
         self._roi_size_row_label = task_layout.labelForField(self.roi_size_combo)
+        self._tile_overlap_row_label = task_layout.labelForField(self.tile_overlap_spin)
         self._propagation_direction_row_label = advanced_layout.labelForField(
             self.propagation_direction_combo
         )
@@ -919,6 +932,15 @@ class AdvancedModePanel(QWidget):
         )
         self.propagate_btn.clicked.connect(self._propagate_existing_session)
 
+        self.batch_local_exemplar_btn = QPushButton("Scan Full Image by Tiles")
+        self.batch_local_exemplar_btn.setObjectName("runButton")
+        self.batch_local_exemplar_btn.setToolTip(
+            "For 2D exemplar segmentation with large-image mode: scan every tile in "
+            "the full image using the current exemplar box, then compose one full-size mask."
+        )
+        self.batch_local_exemplar_btn.clicked.connect(self._run_batch_local_exemplar_task)
+        self.batch_local_exemplar_btn.setVisible(False)
+
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setObjectName("cancelButton")
         cancel_btn.clicked.connect(self._cancel_worker)
@@ -929,6 +951,7 @@ class AdvancedModePanel(QWidget):
 
         row.addWidget(self.run_btn)
         row.addWidget(self.propagate_btn)
+        row.addWidget(self.batch_local_exemplar_btn)
         row.addWidget(clear_preview_btn)
         row.addWidget(cancel_btn)
 
@@ -1195,8 +1218,13 @@ class AdvancedModePanel(QWidget):
         large_image_enabled = self._large_image_mode_enabled()
         self.roi_size_combo.setEnabled(large_image_enabled)
         self.roi_size_combo.setVisible(large_image_enabled)
+        if hasattr(self, "tile_overlap_spin"):
+            self.tile_overlap_spin.setEnabled(large_image_enabled)
+            self.tile_overlap_spin.setVisible(large_image_enabled)
         if hasattr(self, "_roi_size_row_label") and self._roi_size_row_label is not None:
             self._roi_size_row_label.setVisible(large_image_enabled)
+        if hasattr(self, "_tile_overlap_row_label") and self._tile_overlap_row_label is not None:
+            self._tile_overlap_row_label.setVisible(large_image_enabled)
 
         is_video = self._current_task() == Sam3Task.SEGMENT_3D
         self.propagation_direction_combo.setEnabled(is_video)
@@ -1225,10 +1253,26 @@ class AdvancedModePanel(QWidget):
             self.propagate_btn.setVisible(True)
             self.propagate_btn.setEnabled(not running and has_session)
         else:
-            self.run_btn.setText("Run Preview")
-            self.run_btn.setToolTip("Run the selected SAM3 task and write preview layers.")
+            if self._current_task() == Sam3Task.EXEMPLAR and self._large_image_mode_enabled():
+                self.run_btn.setText("Run Current ROI Only")
+                self.run_btn.setToolTip(
+                    "Run exemplar segmentation only around the current exemplar box. "
+                    "Use Scan Full Image by Tiles to cover the whole image."
+                )
+            else:
+                self.run_btn.setText("Run Preview")
+                self.run_btn.setToolTip("Run the selected SAM3 task and write preview layers.")
             self.propagate_btn.setVisible(False)
             self.propagate_btn.setEnabled(False)
+        if hasattr(self, "batch_local_exemplar_btn"):
+            enabled = (
+                not running
+                and not is_video
+                and self._current_task() == Sam3Task.EXEMPLAR
+                and self._large_image_mode_enabled()
+            )
+            self.batch_local_exemplar_btn.setVisible(self._current_task() == Sam3Task.EXEMPLAR)
+            self.batch_local_exemplar_btn.setEnabled(enabled)
         self._sync_preview_output_controls()
 
 
@@ -1470,6 +1514,11 @@ class AdvancedModePanel(QWidget):
         if self._large_image_mode_enabled():
             anchor = roi_anchor_from_bundle(bundle)
             if anchor is not None:
+                if bundle.task == Sam3Task.EXEMPLAR:
+                    self._log(
+                        "Run Current ROI Only will segment one local ROI around the exemplar. "
+                        "Click Scan Full Image by Tiles to scan the entire image."
+                    )
                 self._run_large_image_task(bundle, anchor)
                 return
             self._log(
@@ -1557,6 +1606,240 @@ class AdvancedModePanel(QWidget):
             f"Large-image mode ON: local ROI inference ({bounds.width} x {bounds.height}); "
             f"ROI y={bounds.y0}:{bounds.y1}, x={bounds.x0}:{bounds.x1}."
         )
+
+    def _run_batch_local_exemplar_task(self) -> None:
+        self.activity_status.set_starting_task()
+        if self.viewer is None or self.layer_writer is None:
+            self._log("No napari viewer was provided to the widget.")
+            self.activity_status.set_ready()
+            return
+        if self._current_task() != Sam3Task.EXEMPLAR:
+            self._log("Full-image tiled scan is only available for Exemplar segmentation.")
+            self.activity_status.set_ready()
+            return
+        if not self._large_image_mode_enabled():
+            self._log("Enable large-image local inference before scanning the full image by tiles.")
+            self.activity_status.set_ready()
+            return
+        try:
+            bundle = self._collect_bundle_for_tiled_exemplar()
+        except Exception as exc:
+            self._log(f"Cannot collect exemplar prompt: {exc}")
+            self.activity_status.set_ready()
+            return
+        if not bundle.exemplars:
+            self._log("Draw at least one exemplar box in the selected Shapes layer before tiled scanning.")
+            self.activity_status.set_ready()
+            return
+        cpu_error = self._cpu_bundle_support_error(bundle)
+        if cpu_error:
+            self._log(cpu_error)
+            self.activity_status.set_ready()
+            return
+        image_layer = self.viewer.layers[bundle.image.layer_name]
+        image_hw = self._selection_image_hw(bundle.image)
+        roi_hw = self._selected_roi_size()
+        overlap_fraction = float(self.tile_overlap_spin.value()) / 100.0
+        tiles = self._tile_bounds_for_image(image_hw, roi_hw, overlap_fraction)
+        if not tiles:
+            self._log("No tiles were generated for the selected image.")
+            self.activity_status.set_ready()
+            return
+        try:
+            adapter = self._ensure_adapter()
+        except Exception as exc:
+            self._log(f"Cannot run tiled exemplar scan: {exc}")
+            self.activity_status.set_ready()
+            return
+        self._clear_results_table()
+        self._show_active_roi_overlay(
+            bundle.image.layer_name,
+            None,
+            extra_bounds=[(bundle.image.layer_name, bounds) for bounds in tiles],
+        )
+
+        @thread_worker
+        def run_tiled_exemplar():
+            self._ensure_image_adapter_loaded_for_bundle(adapter, bundle)
+            composed = np.zeros(image_hw, dtype=np.uint32)
+            next_object_id = 1
+            exemplar = np.asarray(bundle.exemplars[0].roi)
+            total = len(tiles)
+            for index, bounds in enumerate(tiles, start=1):
+                yield f"Tiled exemplar scan {index}/{total}: y={bounds.y0}:{bounds.y1}, x={bounds.x0}:{bounds.x1}"
+                tile = extract_2d_roi(image_layer.data, bundle.image, bounds)
+                augmented, tile_origin, exemplar_box = self._augmented_exemplar_tile(tile, exemplar)
+                tile_bundle = self._bundle_for_augmented_exemplar(bundle, augmented, exemplar_box)
+                result = adapter.run_image(
+                    augmented,
+                    tile_bundle,
+                    cache_context=self._cache_context_for_layer(
+                        image_layer,
+                        bundle,
+                        roi_bounds=bounds,
+                    ),
+                )
+                local_labels = self._result_labels_for_tile(result, augmented.shape, tile_origin, (bounds.height, bounds.width))
+                next_object_id = self._compose_tile_labels(
+                    composed,
+                    local_labels,
+                    bounds,
+                    next_object_id,
+                )
+            result = Sam3Result(
+                task=Sam3Task.EXEMPLAR,
+                labels=composed,
+                metadata={
+                    "image_layer": bundle.image.layer_name,
+                    "large_image_mode": True,
+                    "large_image_tiled_scan": True,
+                    "large_image_hw": image_hw,
+                    "tile_count": total,
+                    "tile_size": roi_hw,
+                    "tile_overlap_percent": int(self.tile_overlap_spin.value()),
+                    "result_space": "global_image",
+                },
+            )
+            return result
+
+        worker = run_tiled_exemplar()
+        worker.yielded.connect(self._log)
+        worker.returned.connect(self._write_image_result)
+        self._start_worker(worker)
+        self._log(
+            f"Started full-image tiled exemplar scan: {len(tiles)} tile(s), "
+            f"tile size {roi_hw[1]} x {roi_hw[0]}, overlap {self.tile_overlap_spin.value()}%."
+        )
+
+    def _collect_bundle_for_tiled_exemplar(self) -> PromptBundle:
+        if self.viewer is None:
+            raise RuntimeError("No napari viewer was provided to the widget.")
+        image_layer_name = self._current_image_layer_name()
+        if not image_layer_name:
+            raise RuntimeError("Select an image layer first.")
+        channel_axis = self.channel_axis_spin.value()
+        return self.prompt_collector.collect(
+            self.viewer,
+            image_layer_name=image_layer_name,
+            task=Sam3Task.EXEMPLAR,
+            points_layer_name=None,
+            shapes_layer_name=self._optional_combo_data(self.shapes_layer_combo),
+            labels_layer_name=None,
+            text="",
+            channel_axis=None if channel_axis < 0 else channel_axis,
+            collect_exemplar_rois=True,
+        )
+
+    def _tile_bounds_for_image(
+        self,
+        image_hw: tuple[int, int],
+        roi_hw: tuple[int, int],
+        overlap_fraction: float,
+    ) -> list[RoiBounds]:
+        height, width = image_hw
+        tile_h = min(int(roi_hw[0]), height)
+        tile_w = min(int(roi_hw[1]), width)
+        stride_y = max(1, int(round(tile_h * (1.0 - overlap_fraction))))
+        stride_x = max(1, int(round(tile_w * (1.0 - overlap_fraction))))
+        y_starts = self._tile_starts(height, tile_h, stride_y)
+        x_starts = self._tile_starts(width, tile_w, stride_x)
+        return [
+            RoiBounds(y0=y, x0=x, y1=min(height, y + tile_h), x1=min(width, x + tile_w))
+            for y in y_starts
+            for x in x_starts
+        ]
+
+    def _tile_starts(self, size: int, tile_size: int, stride: int) -> list[int]:
+        if size <= tile_size:
+            return [0]
+        starts = list(range(0, max(1, size - tile_size + 1), stride))
+        last = size - tile_size
+        if starts[-1] != last:
+            starts.append(last)
+        return sorted(set(int(value) for value in starts))
+
+    def _augmented_exemplar_tile(
+        self,
+        tile: np.ndarray,
+        exemplar: np.ndarray,
+    ) -> tuple[np.ndarray, tuple[int, int], BoxPrompt]:
+        tile_arr = np.asarray(tile)
+        exemplar_arr = np.asarray(exemplar)
+        if tile_arr.ndim == 2 and exemplar_arr.ndim == 3 and exemplar_arr.shape[-1] in (1, 3, 4):
+            exemplar_arr = exemplar_arr[..., 0]
+        if tile_arr.ndim == 3 and tile_arr.shape[-1] in (1, 3, 4) and exemplar_arr.ndim == 2:
+            exemplar_arr = np.repeat(exemplar_arr[..., None], tile_arr.shape[-1], axis=-1)
+        gap = 8
+        exemplar_h = min(int(exemplar_arr.shape[0]), int(tile_arr.shape[0]))
+        exemplar_w = min(int(exemplar_arr.shape[1]), int(tile_arr.shape[1]))
+        exemplar_crop = exemplar_arr[:exemplar_h, :exemplar_w]
+        out_shape = (tile_arr.shape[0], exemplar_w + gap + tile_arr.shape[1], *tile_arr.shape[2:])
+        augmented = np.zeros(out_shape, dtype=tile_arr.dtype)
+        augmented[:exemplar_h, :exemplar_w, ...] = exemplar_crop
+        tile_x0 = exemplar_w + gap
+        augmented[: tile_arr.shape[0], tile_x0 : tile_x0 + tile_arr.shape[1], ...] = tile_arr
+        box = BoxPrompt(y0=0.0, x0=0.0, y1=float(exemplar_h), x1=float(exemplar_w))
+        return augmented, (0, tile_x0), box
+
+    def _bundle_for_augmented_exemplar(
+        self,
+        source_bundle: PromptBundle,
+        augmented: np.ndarray,
+        exemplar_box: BoxPrompt,
+    ) -> PromptBundle:
+        selection = infer_image_selection(
+            layer_name=source_bundle.image.layer_name,
+            data_shape=tuple(int(value) for value in augmented.shape),
+            channel_axis=augmented.ndim - 1 if augmented.ndim >= 3 and augmented.shape[-1] in (1, 3, 4) else None,
+        )
+        return PromptBundle(
+            task=Sam3Task.EXEMPLAR,
+            image=selection,
+            boxes=[exemplar_box],
+        )
+
+    def _result_labels_for_tile(
+        self,
+        result: Sam3Result,
+        augmented_shape: tuple[int, ...],
+        tile_origin: tuple[int, int],
+        tile_hw: tuple[int, int],
+    ) -> np.ndarray:
+        label_image = np.zeros(augmented_shape[:2], dtype=np.uint32)
+        if result.labels is not None:
+            labels = np.asarray(result.labels)
+            if labels.ndim == 2:
+                label_image = labels.astype(np.uint32, copy=False)
+        elif result.masks is not None:
+            masks = np.asarray(result.masks)
+            if masks.ndim == 2:
+                label_image[masks > 0] = 1
+            elif masks.ndim >= 3:
+                for mask_index, mask in enumerate(masks, start=1):
+                    label_image[np.asarray(mask) > 0] = int(mask_index)
+        y0, x0 = tile_origin
+        tile_h, tile_w = tile_hw
+        return np.asarray(label_image[y0 : y0 + tile_h, x0 : x0 + tile_w], dtype=np.uint32)
+
+    def _compose_tile_labels(
+        self,
+        composed: np.ndarray,
+        local_labels: np.ndarray,
+        bounds: RoiBounds,
+        next_object_id: int,
+    ) -> int:
+        components, count = ndi.label(np.asarray(local_labels) != 0)
+        if count == 0:
+            return next_object_id
+        target = composed[bounds.y0:bounds.y1, bounds.x0:bounds.x1]
+        for component_id in range(1, int(count) + 1):
+            mask = components == component_id
+            write_mask = mask & (target == 0)
+            if not np.any(write_mask):
+                continue
+            target[write_mask] = int(next_object_id)
+            next_object_id += 1
+        return next_object_id
 
     def _video_roi_bounds_for_bundle(self, bundle: PromptBundle) -> RoiBounds | None:
         if not self._large_image_mode_enabled():
@@ -1785,11 +2068,18 @@ class AdvancedModePanel(QWidget):
             self._log_text_result_guidance(result)
             return
         update_boxes = self._should_update_boxes_for_result(result)
+        labels_name = "SAM3 preview labels"
+        mask_name = "SAM3 preview masks"
+        boxes_name = "SAM3 preview boxes"
+        if result.metadata.get("large_image_tiled_scan"):
+            labels_name = "SAM3 tiled exemplar labels"
+            mask_name = "SAM3 tiled exemplar masks"
+            boxes_name = "SAM3 tiled exemplar boxes"
         self.layer_writer.write_result(
             result,
-            labels_name="SAM3 preview labels",
-            mask_name="SAM3 preview masks",
-            boxes_name="SAM3 preview boxes",
+            labels_name=labels_name,
+            mask_name=mask_name,
+            boxes_name=boxes_name,
             update_boxes=update_boxes,
         )
         if self._current_task() == Sam3Task.REFINE:
@@ -1800,6 +2090,10 @@ class AdvancedModePanel(QWidget):
         self._last_quick_mask_path = None
         self._sync_preview_output_controls()
         self._log(self._result_summary(result))
+        if result.metadata.get("large_image_tiled_scan"):
+            tile_count = int(result.metadata.get("tile_count") or 0)
+            nonzero = int(np.count_nonzero(result.labels)) if result.labels is not None else 0
+            self._log(f"Tiled exemplar scan wrote {nonzero} labeled pixel(s) from {tile_count} tile(s).")
         self._log_large_image_result_guidance(result)
         self._log_text_result_guidance(result)
 
@@ -1938,6 +2232,7 @@ class AdvancedModePanel(QWidget):
     def _on_large_image_mode_changed(self, *_args: Any) -> None:
         enabled = self._large_image_mode_enabled()
         self._sync_task_setup_visibility()
+        self._sync_run_controls()
         if enabled:
             width, height = self._selected_roi_size()
             self._log(f"Large-image mode ON: local ROI inference ({width} x {height}).")
@@ -2653,6 +2948,9 @@ class AdvancedModePanel(QWidget):
             "SAM3 preview labels",
             "SAM3 preview masks",
             "SAM3 preview boxes",
+            "SAM3 tiled exemplar labels",
+            "SAM3 tiled exemplar masks",
+            "SAM3 tiled exemplar boxes",
             "SAM3 propagated preview labels",
         )
         preview_prefixes = (
@@ -2712,6 +3010,7 @@ class AdvancedModePanel(QWidget):
             return None
         preferred_names = (
             "SAM3 preview labels",
+            "SAM3 tiled exemplar labels",
             "SAM3 propagated preview labels",
         )
         for name in preferred_names:

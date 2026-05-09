@@ -2,6 +2,20 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.2.9
+
+### Added
+- Added full-image tiled exemplar scanning for 2D Advanced exemplar segmentation.
+- Added a `Scan Full Image by Tiles` action that is available when `Exemplar segmentation` and large-image local inference are enabled.
+- Added a `Tile overlap` control, defaulting to `15%`, for overlap between neighboring local inference tiles.
+- Added composed full-size output layers named `SAM3 tiled exemplar labels`, `SAM3 tiled exemplar masks`, and `SAM3 tiled exemplar boxes`.
+- Added README artwork demonstrating the new batch local exemplar segmentation workflow.
+
+### Changed
+- Changed the normal exemplar run button in large-image mode to `Run Current ROI Only` so users can distinguish a single local ROI test from a full-image tiled scan.
+- Reused the large-image local ROI size as the tiled scan size, allowing large images such as 6k x 6k data to be segmented through smaller SAM3 calls and then composed back into original image coordinates.
+- Improved logs and output naming for tiled exemplar scans, including tile count and labeled-pixel reporting.
+
 ## 4.2.8
 
 ### Added
