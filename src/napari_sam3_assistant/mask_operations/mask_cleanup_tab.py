@@ -34,6 +34,7 @@ from .fast_component_index_service import FastComponentIndex, FastComponentIndex
 from .component_table_widget import ComponentTableWidget
 from .models import AxonHoleCandidate
 from .utils import copy_layer_geometry, image_layer_names, labels_layer_names, safe_get_layer, shapes_layer_names, unique_layer_name
+from ..widgets.collapsible_panel import CollapsiblePanel
 
 
 UNDO_HISTORY_LIMIT = 20
@@ -325,6 +326,106 @@ class MaskCleanupTab(QWidget):
         self.status_label.setText(f"Batch axon preview ready: {len(candidates)} proposal(s), {summary}.")
         self._log(f"Batch axon preview created {len(candidates)} proposal(s): {summary}.")
 
+    def create_myelin_axon_layers(self) -> None:
+        layer = self._target_layer()
+        if layer is None:
+            self._log("Select a target Labels layer.")
+            return
+        sub, indexer, _offset = self._scoped_data(layer)
+        image = self._source_image_for_scoped_labels(layer, indexer)
+        if image is None:
+            self._log("Select a source image layer before creating myelin/axon layers.")
+            return
+        try:
+            roi_mask = self._batch_roi_mask(layer, indexer, sub.shape)
+            candidates, masks, preview = self.cleanup.propose_axon_holes(
+                sub,
+                image,
+                threshold_percent=int(self.axon_threshold_spin.value()),
+                max_fraction_percent=int(self.axon_max_fraction_spin.value()),
+                min_object_size=int(self.batch_min_object_spin.value()),
+                min_confidence_percent=int(self.batch_min_confidence_spin.value()),
+                roi_mask=roi_mask,
+                progress_callback=self._update_batch_preview_progress,
+            )
+        except ValueError as exc:
+            self._log(str(exc))
+            return
+
+        self._batch_axon_candidates = candidates
+        self._batch_axon_masks = masks
+        self._batch_preview_indexer = indexer
+        self._batch_preview_shape = tuple(preview.shape)
+        self._set_batch_axon_records(candidates)
+
+        min_confidence = max(0.0, min(float(self.batch_min_confidence_spin.value()), 100.0)) / 100.0
+        accepted = [
+            candidate
+            for candidate in candidates
+            if candidate.status == "confident"
+            and candidate.confidence >= min_confidence
+            and candidate.candidate_id in masks
+        ]
+        if not accepted:
+            self._log("No confident myelin/axon proposals found. Open Advanced review to inspect candidates.")
+            self.status_label.setText("No confident proposals found; review candidates before creating layers.")
+            return
+
+        myelin_local = np.asarray(sub).copy()
+        axon_local = np.zeros_like(myelin_local, dtype=np.uint32)
+        for candidate in accepted:
+            mask = masks.get(candidate.candidate_id)
+            if mask is None:
+                continue
+            slices = tuple(slice(int(lo), int(hi)) for lo, hi in candidate.bbox)
+            myelin_slice = myelin_local[slices]
+            axon_slice = axon_local[slices]
+            myelin_slice[mask] = 0
+            axon_slice[mask] = int(candidate.label_value)
+
+        myelin_full = self._full_data_from_scoped_result(layer, myelin_local, indexer)
+        axon_full = self._full_data_from_scoped_result(layer, axon_local, indexer)
+
+        myelin_name = unique_layer_name(self.viewer, "myelin_rings")
+        axon_name = unique_layer_name(self.viewer, "axons")
+        source_name = str(layer.name)
+        common_metadata = {
+            "created_from": "Mask Cleanup / Myelin / Axon Rings",
+            "source_layer": source_name,
+            "source_image_layer": str(self.source_image_combo.currentData() or ""),
+            "candidate_count": len(candidates),
+            "accepted_candidate_count": len(accepted),
+            "min_confidence_percent": int(self.batch_min_confidence_spin.value()),
+            "seed_tolerance_percent": int(self.axon_threshold_spin.value()),
+            "max_axon_percent": int(self.axon_max_fraction_spin.value()),
+            "min_object_size": int(self.batch_min_object_spin.value()),
+            "candidate_ids": [int(candidate.candidate_id) for candidate in accepted],
+        }
+        myelin_layer = self.viewer.add_labels(
+            myelin_full,
+            name=myelin_name,
+            metadata={**common_metadata, "sam3_role": "myelin_ring_labels"},
+        )
+        axon_layer = self.viewer.add_labels(
+            axon_full,
+            name=axon_name,
+            metadata={**common_metadata, "sam3_role": "axon_labels"},
+        )
+        copy_layer_geometry(layer, myelin_layer)
+        copy_layer_geometry(layer, axon_layer)
+
+        axon_pixels = int(np.count_nonzero(axon_full))
+        review_count = sum(1 for candidate in candidates if candidate.status in {"review", "failed"})
+        self.status_label.setText(
+            f"Created {myelin_name} and {axon_name}: {len(accepted)} accepted axon object(s), "
+            f"{axon_pixels} axon pixel(s)/voxel(s)."
+        )
+        self._log(
+            f"Created myelin/axon layers from {source_name}: {myelin_name}, {axon_name}; "
+            f"{len(accepted)} accepted of {len(candidates)} candidate(s), {review_count} left for optional review."
+        )
+        self._refresh_all()
+
     def apply_confident_batch_axons(self) -> None:
         self._apply_batch_axons(candidate_ids=None, action_name="apply confident batch axon holes")
 
@@ -602,6 +703,13 @@ class MaskCleanupTab(QWidget):
         copy_layer_geometry(target_layer, layer)
         self._batch_preview_layer_name = name
 
+    def _full_data_from_scoped_result(self, target_layer, scoped_data: np.ndarray, indexer: object) -> np.ndarray:
+        full = np.zeros_like(np.asarray(target_layer.data), dtype=np.uint32)
+        if indexer is Ellipsis:
+            return np.asarray(scoped_data, dtype=np.uint32)
+        full[indexer] = np.asarray(scoped_data, dtype=np.uint32)
+        return full
+
     def _refresh_batch_preview_layer(self) -> None:
         layer = self._target_layer()
         if layer is None or self._batch_preview_shape is None:
@@ -727,7 +835,7 @@ class MaskCleanupTab(QWidget):
             self._open_canvas_context_menu(layer, event)
             return
         mode = self._cleanup_subtab()
-        if mode == "local" and self.axon_cut_enable_check.isChecked():
+        if mode == "axon" and self.axon_cut_enable_check.isChecked():
             self._apply_mouse_action(layer, event, "cut_axon")
             return
 
@@ -841,19 +949,25 @@ class MaskCleanupTab(QWidget):
                 self.component_table.select_component_id(component_id)
             return
 
-        target_text = (
-            f"class {int(self.axon_value_spin.value())}"
-            if self.axon_assign_class_check.isChecked()
-            else "background"
-        )
-        cut_axon_action = menu.addAction(f"Cut axon from clicked point to {target_text}")
-        cut_axon_action.setToolTip("Grow the seed-similar region from the clicked point inside the clicked mask.")
         assign_local_action = menu.addAction(f"Assign clicked local object to {int(self.assignment_value_spin.value())}")
         delete_local_action = menu.addAction("Delete clicked local object")
         delete_value_action = menu.addAction(f"Delete all pixels/voxels with value {label_value}")
         select_action = menu.addAction("Select value row only")
+        cut_axon_action = None
+        if mode == "axon":
+            target_text = (
+                f"class {int(self.axon_value_spin.value())}"
+                if self.axon_assign_class_check.isChecked()
+                else "background"
+            )
+            menu.insertSeparator(assign_local_action)
+            cut_axon_action = menu.insertAction(
+                assign_local_action,
+                f"Cut axon from clicked point to {target_text}",
+            )
+            cut_axon_action.setToolTip("Grow the seed-similar region from the clicked point inside the clicked mask.")
         selected_action = menu.exec_(self._event_global_position(event))
-        if selected_action == cut_axon_action:
+        if cut_axon_action is not None and selected_action == cut_axon_action:
             self._apply_mouse_action(layer, event, "cut_axon")
         elif selected_action == assign_local_action:
             self._apply_mouse_action(layer, event, "assign_local_component")
@@ -1179,7 +1293,8 @@ class MaskCleanupTab(QWidget):
         self.mouse_action_enable_check.toggled.connect(lambda _checked: self._sync_mouse_action_callback())
         self.axon_cut_enable_check = QCheckBox("Enable axon hole click tool")
         self.axon_cut_enable_check.setToolTip(
-            "When on: left-click inside the axon to set the dark connected inner region to background or an axon class."
+            "Myelin/axon workflow only. When on: left-click inside the axon region "
+            "to set the seed-similar inner region to background or an axon class."
         )
         self.axon_cut_enable_check.setChecked(False)
         self.axon_cut_enable_check.toggled.connect(lambda _checked: self._sync_mouse_action_callback())
@@ -1201,11 +1316,15 @@ class MaskCleanupTab(QWidget):
         local_tab = QWidget()
         local_layout = QVBoxLayout()
         local_tab.setLayout(local_layout)
+        axon_tab = QWidget()
+        axon_layout = QVBoxLayout()
+        axon_tab.setLayout(axon_layout)
         values_tab = QWidget()
         values_layout = QVBoxLayout()
         values_tab.setLayout(values_layout)
         self.cleanup_tabs.addTab(components_tab, "Components")
         self.cleanup_tabs.addTab(local_tab, "Local Edit")
+        self.cleanup_tabs.addTab(axon_tab, "Myelin / Axon Rings")
         self.cleanup_tabs.addTab(values_tab, "Values")
         root.addWidget(self.cleanup_tabs)
 
@@ -1248,7 +1367,6 @@ class MaskCleanupTab(QWidget):
         root.addLayout(assignment)
 
         local_mouse_row = QHBoxLayout()
-        local_mouse_row.addWidget(self.axon_cut_enable_check)
         local_mouse_row.addWidget(self.canvas_assign_enable_check)
         local_mouse_row.addWidget(self.mouse_action_enable_check)
         local_mouse_row.addStretch(1)
@@ -1281,6 +1399,24 @@ class MaskCleanupTab(QWidget):
         operations.setColumnStretch(2, 1)
         components_layout.addLayout(operations)
 
+        axon_note = QLabel(
+            "One-click myelin/axon output for ring-shaped masks. This workflow creates new "
+            "myelin and axon Labels layers and does not edit the original target layer."
+        )
+        axon_note.setWordWrap(True)
+        axon_layout.addWidget(axon_note)
+        axon_primary_row = QHBoxLayout()
+        self.create_myelin_axon_btn = QPushButton("Create Myelin + Axon Layers")
+        self.create_myelin_axon_btn.setToolTip(
+            "Run automatic axon-hole detection, keep confident proposals, and create "
+            "separate myelin_rings and axons Labels layers without changing the source labels."
+        )
+        self.create_myelin_axon_btn.clicked.connect(self.create_myelin_axon_layers)
+        axon_primary_row.addWidget(self.create_myelin_axon_btn)
+        axon_primary_row.addWidget(self.axon_cut_enable_check)
+        axon_primary_row.addStretch(1)
+        axon_layout.addLayout(axon_primary_row)
+
         axon_row = QHBoxLayout()
         axon_row.addWidget(QLabel("Seed tolerance %"))
         self.axon_threshold_spin = QSpinBox()
@@ -1307,7 +1443,36 @@ class MaskCleanupTab(QWidget):
         self.axon_value_spin.setToolTip("Class value used when Assign axon class is enabled.")
         axon_row.addWidget(self.axon_value_spin)
         axon_row.addStretch(1)
-        local_layout.addLayout(axon_row)
+        axon_layout.addLayout(axon_row)
+
+        axon_filter_row = QHBoxLayout()
+        axon_filter_row.addWidget(QLabel("Min object"))
+        self.batch_min_object_spin = QSpinBox()
+        self.batch_min_object_spin.setRange(1, 2_147_483_647)
+        self.batch_min_object_spin.setValue(32)
+        self.batch_min_object_spin.setToolTip(
+            "Ignore candidate objects smaller than this many pixels/voxels."
+        )
+        axon_filter_row.addWidget(self.batch_min_object_spin)
+        axon_filter_row.addWidget(QLabel("Min confidence %"))
+        self.batch_min_confidence_spin = QSpinBox()
+        self.batch_min_confidence_spin.setRange(0, 100)
+        self.batch_min_confidence_spin.setValue(70)
+        self.batch_min_confidence_spin.setToolTip(
+            "Confidence cutoff for the one-click output and Apply Confident. "
+            "Lower values accept more proposals; higher values are more conservative."
+        )
+        axon_filter_row.addWidget(self.batch_min_confidence_spin)
+        axon_filter_row.addWidget(QLabel("ROI shape"))
+        self.batch_roi_combo = QComboBox()
+        self.batch_roi_combo.setToolTip("Optional Shapes layer; candidates are limited to objects whose seed is inside the ROI bbox.")
+        axon_filter_row.addWidget(self.batch_roi_combo)
+        axon_filter_row.addStretch(1)
+        axon_layout.addLayout(axon_filter_row)
+
+        advanced_review = QWidget()
+        advanced_review_layout = QVBoxLayout()
+        advanced_review.setLayout(advanced_review_layout)
 
         batch_row = QHBoxLayout()
         self.batch_preview_btn = QPushButton("Preview Batch Axons")
@@ -1370,29 +1535,8 @@ class MaskCleanupTab(QWidget):
         batch_row.addWidget(self.batch_skip_low_btn)
         batch_row.addWidget(self.batch_select_visible_btn)
         batch_row.addWidget(self.batch_export_selected_btn)
-        batch_row.addWidget(QLabel("Min object"))
-        self.batch_min_object_spin = QSpinBox()
-        self.batch_min_object_spin.setRange(1, 2_147_483_647)
-        self.batch_min_object_spin.setValue(32)
-        self.batch_min_object_spin.setToolTip(
-            "Ignore candidate objects smaller than this many pixels/voxels during batch preview."
-        )
-        batch_row.addWidget(self.batch_min_object_spin)
-        batch_row.addWidget(QLabel("Min confidence %"))
-        self.batch_min_confidence_spin = QSpinBox()
-        self.batch_min_confidence_spin.setRange(0, 100)
-        self.batch_min_confidence_spin.setValue(70)
-        self.batch_min_confidence_spin.setToolTip(
-            "Confidence cutoff used by Apply Confident and Skip Low Confidence. "
-            "Lower values apply more proposals; higher values are more conservative."
-        )
-        batch_row.addWidget(self.batch_min_confidence_spin)
-        batch_row.addWidget(QLabel("ROI shape"))
-        self.batch_roi_combo = QComboBox()
-        self.batch_roi_combo.setToolTip("Optional Shapes layer; candidates are limited to objects whose seed is inside the ROI bbox.")
-        batch_row.addWidget(self.batch_roi_combo)
         batch_row.addStretch(1)
-        local_layout.addLayout(batch_row)
+        advanced_review_layout.addLayout(batch_row)
 
         batch_status_row = QHBoxLayout()
         for status in ("confident", "review", "failed", "skipped"):
@@ -1405,7 +1549,7 @@ class MaskCleanupTab(QWidget):
             batch_status_row.addWidget(select_btn)
             batch_status_row.addWidget(export_btn)
         batch_status_row.addStretch(1)
-        local_layout.addLayout(batch_status_row)
+        advanced_review_layout.addLayout(batch_status_row)
 
         self.batch_axon_table = QTableWidget(0, 7)
         self.batch_axon_table.setHorizontalHeaderLabels(
@@ -1445,7 +1589,8 @@ class MaskCleanupTab(QWidget):
             }
             """
         )
-        local_layout.addWidget(self.batch_axon_table)
+        advanced_review_layout.addWidget(self.batch_axon_table)
+        axon_layout.addWidget(CollapsiblePanel("Advanced review", advanced_review, collapsed=True))
 
         self.unique_values_table = QTableWidget(0, 2)
         self.unique_values_table.setObjectName("maskValueTable")
@@ -1518,7 +1663,7 @@ class MaskCleanupTab(QWidget):
         tabs = getattr(self, "cleanup_tabs", None)
         if tabs is None:
             return "components"
-        return {0: "components", 1: "local", 2: "values"}.get(int(tabs.currentIndex()), "components")
+        return {0: "components", 1: "local", 2: "axon", 3: "values"}.get(int(tabs.currentIndex()), "components")
 
     def _on_cleanup_subtab_changed(self) -> None:
         self._sync_mouse_action_callback()
@@ -1529,6 +1674,8 @@ class MaskCleanupTab(QWidget):
         mode = self._cleanup_subtab()
         if mode == "local":
             return "Mouse mode: Local Edit. Click tools use local flood-fill and do not rebuild the component table."
+        if mode == "axon":
+            return "Mouse mode: Myelin / Axon Rings. Axon click tools are opt-in and specific to ring-shaped masks."
         if mode == "components":
             return "Mouse mode: Components. Requires a fresh Analyze Layer index for component row selection/actions."
         return "Mouse mode: Values. Clicks select or edit label values without component analysis."

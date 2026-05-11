@@ -2,6 +2,27 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.2.10
+
+### Added
+- Added full-image tiled exemplar scanning for 2D Advanced exemplar segmentation.
+- Added a `Scan Full Image by Tiles` action that is available when `Exemplar segmentation` and large-image local inference are enabled.
+- Added a `Tile overlap` control, defaulting to `15%`, for overlap between neighboring local inference tiles.
+- Added a default-on `Merge seam-split objects` option that reconnects labels cut by tile boundaries using a narrow seam-band union-find pass.
+- Added composed full-size output layers named `SAM3 tiled exemplar labels`, `SAM3 tiled exemplar masks`, and `SAM3 tiled exemplar boxes`.
+- Added README artwork demonstrating the new batch local exemplar segmentation workflow.
+- Added a dedicated `Myelin / Axon Rings` tab inside `Mask Cleanup / Multiclass`.
+- Added one-click `Create Myelin + Axon Layers` output that creates separate `myelin_rings` and `axons` Labels layers without editing the original SAM3 labels.
+
+### Changed
+- Changed the normal exemplar run button in large-image mode to `Run Current ROI Only` so users can distinguish a single local ROI test from a full-image tiled scan.
+- Reused the large-image local ROI size as the tiled scan size, allowing large images such as 6k x 6k data to be segmented through smaller SAM3 calls and then composed back into original image coordinates.
+- Repaired common tiled-stitch artifacts by relabeling seam-merged objects sequentially after composition.
+- Improved logs and output naming for tiled exemplar scans, including tile count and labeled-pixel reporting.
+- Reorganized `Mask Cleanup / Multiclass` so `Local Edit` contains only general canvas assign/delete tools.
+- Moved myelin/axon proposal review buttons and the proposal table into collapsed `Advanced review`.
+- Scoped the axon click tool and axon right-click action to the `Myelin / Axon Rings` tab.
+
 ## 4.2.9
 
 ### Added

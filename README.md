@@ -17,9 +17,9 @@ The plugin focuses on task-based segmentation workflows:
 
 
 
-## What's New in 4.2.9
+## What's New in 4.2.10
 
-Version 4.2.9 adds batch local exemplar segmentation for large 2D images. Pick one exemplar ROI, enable large-image local inference, then let SAM3 scan the full image tile by tile and compose the result back into one full-size labels layer.
+Version 4.2.10 adds batch local exemplar segmentation for large 2D images and a clearer Mask Operations cleanup workflow. Pick one exemplar ROI, enable large-image local inference, then let SAM3 scan the full image tile by tile and compose the result back into one full-size labels layer.
 
 ![Batch local exemplar segmentation scans large images tile by tile](docs/tiled_exemplar_scan.png)
 
@@ -30,6 +30,9 @@ Version 4.2.9 adds batch local exemplar segmentation for large 2D images. Pick o
 - Composed all tile results into `SAM3 tiled exemplar labels` with full original image shape.
 - Renamed the normal run action in this mode to `Run Current ROI Only`, making the difference between one local test tile and full-image scanning clear.
 - Added clearer progress and output naming so users can tell whether they ran a single ROI or a full tiled scan.
+- Reorganized `Mask Cleanup / Multiclass` so `Local Edit` stays general-purpose instead of showing myelin/axon-specific controls.
+- Added a dedicated `Myelin / Axon Rings` tab with one-click `Create Myelin + Axon Layers` output.
+- Moved the detailed axon proposal table and review/export buttons into collapsed `Advanced review`.
 
 
 ## What's New in 4.2.0
