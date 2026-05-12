@@ -702,6 +702,7 @@ class AdvancedModePanel(QWidget):
         self.task_combo.currentIndexChanged.connect(self._on_task_changed)
 
         self.image_layer_combo = QComboBox()
+        self.image_layer_combo.currentIndexChanged.connect(self._on_target_image_changed)
         self.batch_all_images_check = QCheckBox("Batch all image layers")
         self.batch_all_images_check.setToolTip(
             "Run the current prompt setup on every napari Image layer. "
@@ -745,6 +746,27 @@ class AdvancedModePanel(QWidget):
             "straight tile boundaries. This checks only narrow tile seam bands."
         )
 
+        self.exemplar_source_combo = QComboBox()
+        self.exemplar_source_combo.addItem("Use box from target image", "target")
+        self.exemplar_source_combo.addItem("Use separate crop image", "crop")
+        self.exemplar_source_combo.setToolTip(
+            "For tiled exemplar scans, choose whether the example comes from the "
+            "target image or from a separate crop image layer."
+        )
+        self.exemplar_source_combo.currentIndexChanged.connect(self._on_exemplar_source_changed)
+
+        self.exemplar_crop_layer_combo = QComboBox()
+        self.exemplar_crop_layer_combo.setToolTip(
+            "Small Image layer to use as the exemplar source while scanning the target image."
+        )
+
+        self.exemplar_crop_region_combo = QComboBox()
+        self.exemplar_crop_region_combo.addItem("Whole crop image", "whole")
+        self.exemplar_crop_region_combo.addItem("Box from Shapes layer", "box")
+        self.exemplar_crop_region_combo.setToolTip(
+            "Use the full crop as the exemplar, or crop one box from the selected Shapes layer."
+        )
+
         self.channel_axis_spin = QSpinBox()
         self.channel_axis_spin.setRange(-1, 8)
         self.channel_axis_spin.setValue(-1)
@@ -774,12 +796,15 @@ class AdvancedModePanel(QWidget):
         self.sam31_diagnostics_check.toggled.connect(lambda _checked: self._save_settings())
 
         task_layout.addRow("Task", self.task_combo)
-        task_layout.addRow("Target image", self.image_layer_combo)
+        task_layout.addRow("Target image to scan", self.image_layer_combo)
         task_layout.addRow("", self.batch_all_images_check)
         task_layout.addRow("", self.large_image_check)
         task_layout.addRow("ROI size", self.roi_size_combo)
         task_layout.addRow("Tile overlap", self.tile_overlap_spin)
         task_layout.addRow("", self.merge_tile_seams_check)
+        task_layout.addRow("Exemplar source", self.exemplar_source_combo)
+        task_layout.addRow("Exemplar crop image", self.exemplar_crop_layer_combo)
+        task_layout.addRow("Crop region", self.exemplar_crop_region_combo)
 
         advanced_content = QWidget()
         advanced_layout = QFormLayout()
@@ -802,6 +827,9 @@ class AdvancedModePanel(QWidget):
         self._task_setup_form = task_layout
         self._roi_size_row_label = task_layout.labelForField(self.roi_size_combo)
         self._tile_overlap_row_label = task_layout.labelForField(self.tile_overlap_spin)
+        self._exemplar_source_row_label = task_layout.labelForField(self.exemplar_source_combo)
+        self._exemplar_crop_layer_row_label = task_layout.labelForField(self.exemplar_crop_layer_combo)
+        self._exemplar_crop_region_row_label = task_layout.labelForField(self.exemplar_crop_region_combo)
         self._propagation_direction_row_label = advanced_layout.labelForField(
             self.propagation_direction_combo
         )
@@ -1190,6 +1218,8 @@ class AdvancedModePanel(QWidget):
                 self._connect_layer_events()
 
         self._set_combo_items(self.image_layer_combo, self._layer_names({"image"}), include_none=False)
+        if hasattr(self, "exemplar_crop_layer_combo"):
+            self._refresh_exemplar_crop_layer_combo()
         self._set_combo_items(self.points_layer_combo, self._layer_names({"points"}))
         self._set_combo_items(self.shapes_layer_combo, self._layer_names({"shapes"}))
         self._set_combo_items(self.labels_layer_combo, self._layer_names({"labels"}))
@@ -1203,6 +1233,17 @@ class AdvancedModePanel(QWidget):
         if hasattr(self, "live_point_refinement"):
             self._sync_live_refinement_layer()
         self._sync_preview_output_controls()
+        self._sync_task_setup_visibility()
+
+    def _refresh_exemplar_crop_layer_combo(self) -> None:
+        if not hasattr(self, "exemplar_crop_layer_combo"):
+            return
+        target_name = self._current_image_layer_name()
+        crop_names = [name for name in self._layer_names({"image"}) if name != target_name]
+        previous = self.exemplar_crop_layer_combo.currentData()
+        self._set_combo_items(self.exemplar_crop_layer_combo, crop_names, include_none=True)
+        if previous not in crop_names and len(crop_names) == 1:
+            self._select_combo_data(self.exemplar_crop_layer_combo, crop_names[0])
 
     def _on_task_changed(self) -> None:
         task = self._current_task()
@@ -1219,12 +1260,19 @@ class AdvancedModePanel(QWidget):
         if hasattr(self, "live_point_refinement"):
             self._sync_live_refinement_layer()
 
+    def _on_target_image_changed(self, *_args: Any) -> None:
+        self._refresh_exemplar_crop_layer_combo()
+        self._sync_task_setup_visibility()
+        self._sync_run_controls()
 
     def _sync_task_setup_visibility(self) -> None:
         if not hasattr(self, "roi_size_combo") or not hasattr(self, "propagation_direction_combo"):
             return
 
         large_image_enabled = self._large_image_mode_enabled()
+        is_exemplar = self._current_task() == Sam3Task.EXEMPLAR
+        show_exemplar_source = large_image_enabled and is_exemplar
+        use_external_crop = show_exemplar_source and self._external_exemplar_source_enabled()
         self.roi_size_combo.setEnabled(large_image_enabled)
         self.roi_size_combo.setVisible(large_image_enabled)
         if hasattr(self, "tile_overlap_spin"):
@@ -1237,6 +1285,27 @@ class AdvancedModePanel(QWidget):
             self._roi_size_row_label.setVisible(large_image_enabled)
         if hasattr(self, "_tile_overlap_row_label") and self._tile_overlap_row_label is not None:
             self._tile_overlap_row_label.setVisible(large_image_enabled)
+        if hasattr(self, "exemplar_source_combo"):
+            self.exemplar_source_combo.setEnabled(show_exemplar_source)
+            self.exemplar_source_combo.setVisible(show_exemplar_source)
+        if hasattr(self, "exemplar_crop_layer_combo"):
+            self.exemplar_crop_layer_combo.setEnabled(use_external_crop)
+            self.exemplar_crop_layer_combo.setVisible(use_external_crop)
+        if hasattr(self, "exemplar_crop_region_combo"):
+            self.exemplar_crop_region_combo.setEnabled(use_external_crop)
+            self.exemplar_crop_region_combo.setVisible(use_external_crop)
+        if hasattr(self, "_exemplar_source_row_label") and self._exemplar_source_row_label is not None:
+            self._exemplar_source_row_label.setVisible(show_exemplar_source)
+        if (
+            hasattr(self, "_exemplar_crop_layer_row_label")
+            and self._exemplar_crop_layer_row_label is not None
+        ):
+            self._exemplar_crop_layer_row_label.setVisible(use_external_crop)
+        if (
+            hasattr(self, "_exemplar_crop_region_row_label")
+            and self._exemplar_crop_region_row_label is not None
+        ):
+            self._exemplar_crop_region_row_label.setVisible(use_external_crop)
 
         is_video = self._current_task() == Sam3Task.SEGMENT_3D
         self.propagation_direction_combo.setEnabled(is_video)
@@ -1283,7 +1352,21 @@ class AdvancedModePanel(QWidget):
                 and self._current_task() == Sam3Task.EXEMPLAR
                 and self._large_image_mode_enabled()
             )
-            self.batch_local_exemplar_btn.setVisible(self._current_task() == Sam3Task.EXEMPLAR)
+            if self._external_exemplar_source_enabled():
+                self.batch_local_exemplar_btn.setText("Scan Target Image by Tiles")
+                self.batch_local_exemplar_btn.setToolTip(
+                    "Scan the selected target image by tiles using a separate crop image "
+                    "as the visual exemplar source."
+                )
+            else:
+                self.batch_local_exemplar_btn.setText("Scan Full Image by Tiles")
+                self.batch_local_exemplar_btn.setToolTip(
+                    "For 2D exemplar segmentation with large-image mode: scan every tile in "
+                    "the full image using the current exemplar box, then compose one full-size mask."
+                )
+            self.batch_local_exemplar_btn.setVisible(
+                self._current_task() == Sam3Task.EXEMPLAR and self._large_image_mode_enabled()
+            )
             self.batch_local_exemplar_btn.setEnabled(enabled)
         self._sync_preview_output_controls()
 
@@ -1639,8 +1722,10 @@ class AdvancedModePanel(QWidget):
             self._log(f"Cannot collect exemplar prompt: {exc}")
             self.activity_status.set_ready()
             return
-        if not bundle.exemplars:
-            self._log("Draw at least one exemplar box in the selected Shapes layer before tiled scanning.")
+        try:
+            exemplar, exemplar_source_name = self._collect_tiled_exemplar_patch(bundle)
+        except Exception as exc:
+            self._log(f"Cannot collect exemplar source: {exc}")
             self.activity_status.set_ready()
             return
         cpu_error = self._cpu_bundle_support_error(bundle)
@@ -1651,6 +1736,14 @@ class AdvancedModePanel(QWidget):
         image_layer = self.viewer.layers[bundle.image.layer_name]
         image_hw = self._selection_image_hw(bundle.image)
         roi_hw = self._selected_roi_size()
+        exemplar_hw = tuple(int(value) for value in np.asarray(exemplar).shape[:2])
+        if exemplar_hw[0] > roi_hw[0] or exemplar_hw[1] > roi_hw[1]:
+            self._log(
+                "The exemplar crop is larger than the tile size. "
+                "Select a smaller crop or increase ROI size."
+            )
+            self.activity_status.set_ready()
+            return
         overlap_fraction = float(self.tile_overlap_spin.value()) / 100.0
         merge_tile_seams = bool(self.merge_tile_seams_check.isChecked())
         tiles = self._tile_bounds_for_image(image_hw, roi_hw, overlap_fraction)
@@ -1676,7 +1769,6 @@ class AdvancedModePanel(QWidget):
             self._ensure_image_adapter_loaded_for_bundle(adapter, bundle)
             composed = np.zeros(image_hw, dtype=np.uint32)
             next_object_id = 1
-            exemplar = np.asarray(bundle.exemplars[0].roi)
             total = len(tiles)
             for index, bounds in enumerate(tiles, start=1):
                 yield f"Tiled exemplar scan {index}/{total}: y={bounds.y0}:{bounds.y1}, x={bounds.x0}:{bounds.x1}"
@@ -1722,6 +1814,8 @@ class AdvancedModePanel(QWidget):
                     "tile_seam_merge_count": seam_merge_count,
                     "tile_seam_merge_dilation_px": 2,
                     "tile_seam_merge_min_contact_pixels": 8,
+                    "exemplar_source_layer": exemplar_source_name,
+                    "external_exemplar_source": self._external_exemplar_source_enabled(),
                     "result_space": "global_image",
                 },
             )
@@ -1736,6 +1830,11 @@ class AdvancedModePanel(QWidget):
             f"tile size {roi_hw[1]} x {roi_hw[0]}, overlap {self.tile_overlap_spin.value()}%, "
             f"seam merge {'ON' if merge_tile_seams else 'OFF'}."
         )
+        if self._external_exemplar_source_enabled():
+            self._log(
+                f"Using crop layer '{exemplar_source_name}' as exemplar source and scanning "
+                f"target image '{bundle.image.layer_name}' by tiles."
+            )
 
     def _collect_bundle_for_tiled_exemplar(self) -> PromptBundle:
         if self.viewer is None:
@@ -1755,6 +1854,54 @@ class AdvancedModePanel(QWidget):
             channel_axis=None if channel_axis < 0 else channel_axis,
             collect_exemplar_rois=True,
         )
+
+    def _collect_tiled_exemplar_patch(self, bundle: PromptBundle) -> tuple[np.ndarray, str]:
+        if self._external_exemplar_source_enabled():
+            return self._collect_external_exemplar_patch()
+        if not bundle.exemplars:
+            raise RuntimeError("Draw at least one exemplar box in the selected Shapes layer before tiled scanning.")
+        return np.asarray(bundle.exemplars[0].roi), bundle.image.layer_name
+
+    def _collect_external_exemplar_patch(self) -> tuple[np.ndarray, str]:
+        if self.viewer is None:
+            raise RuntimeError("No napari viewer was provided to the widget.")
+        crop_layer_name = self._optional_combo_data(self.exemplar_crop_layer_combo)
+        if not crop_layer_name:
+            raise RuntimeError("Select a crop image layer to use as the exemplar source.")
+        target_layer_name = self._current_image_layer_name()
+        if crop_layer_name == target_layer_name:
+            raise RuntimeError(
+                f"Target image and exemplar crop image are both '{target_layer_name}'. "
+                "Set Target image to the large image to scan, and Exemplar crop image "
+                "to the small crop layer."
+            )
+        region_mode = self.exemplar_crop_region_combo.currentData()
+        if region_mode == "box":
+            channel_axis = self.channel_axis_spin.value()
+            crop_bundle = self.prompt_collector.collect(
+                self.viewer,
+                image_layer_name=crop_layer_name,
+                task=Sam3Task.EXEMPLAR,
+                points_layer_name=None,
+                shapes_layer_name=self._optional_combo_data(self.shapes_layer_combo),
+                labels_layer_name=None,
+                text="",
+                channel_axis=None if channel_axis < 0 else channel_axis,
+                collect_exemplar_rois=True,
+            )
+            if not crop_bundle.exemplars:
+                raise RuntimeError(
+                    "Draw at least one box in the selected Shapes layer, or choose Whole crop image."
+                )
+            return np.asarray(crop_bundle.exemplars[0].roi), crop_layer_name
+
+        crop_layer = self.viewer.layers[crop_layer_name]
+        selection = self._image_selection_for_layer(crop_layer)
+        patch = extract_2d_image(crop_layer.data, selection)
+        patch = np.asarray(patch)
+        if patch.size == 0 or patch.shape[0] < 1 or patch.shape[1] < 1:
+            raise RuntimeError("The selected crop image layer is empty.")
+        return patch, crop_layer_name
 
     def _tile_bounds_for_image(
         self,
@@ -2381,6 +2528,12 @@ class AdvancedModePanel(QWidget):
     def _large_image_mode_enabled(self) -> bool:
         return bool(hasattr(self, "large_image_check") and self.large_image_check.isChecked())
 
+    def _external_exemplar_source_enabled(self) -> bool:
+        return bool(
+            hasattr(self, "exemplar_source_combo")
+            and self.exemplar_source_combo.currentData() == "crop"
+        )
+
     def _sam31_diagnostics_enabled(self) -> bool:
         return bool(
             hasattr(self, "sam31_diagnostics_check")
@@ -2407,6 +2560,10 @@ class AdvancedModePanel(QWidget):
             self._active_rois.clear()
             self._clear_active_roi_overlay()
             self._log("Large-image mode OFF: full-image inference.")
+
+    def _on_exemplar_source_changed(self, *_args: Any) -> None:
+        self._sync_task_setup_visibility()
+        self._sync_run_controls()
 
     def _selection_image_hw(self, selection) -> tuple[int, int]:
         y_axis, x_axis = selection.spatial_axes
@@ -2779,6 +2936,11 @@ class AdvancedModePanel(QWidget):
         task = self._current_task()
         tool = self.prompt_tool_combo.currentData()
         layer_name: str | None = None
+        preserve_target_name = (
+            self._current_image_layer_name()
+            if task == Sam3Task.EXEMPLAR and self._external_exemplar_source_enabled()
+            else ""
+        )
 
         if tool == PROMPT_POINTS:
             if task == Sam3Task.REFINE:
@@ -2799,10 +2961,19 @@ class AdvancedModePanel(QWidget):
             self.viewer.layers.selection.active = layer
             self._set_layer_mode(layer, "add_rectangle")
             if task == Sam3Task.EXEMPLAR:
-                self._log(
-                    "Created/selected SAM3 boxes layer for exemplars. Draw ROI boxes "
-                    "around example objects, then click Run Preview."
-                )
+                if self._external_exemplar_source_enabled():
+                    crop_name = self._optional_combo_data(self.exemplar_crop_layer_combo) or "(select crop image)"
+                    target_name = self._current_image_layer_name() or "(select target image)"
+                    self._log(
+                        "Created/selected SAM3 boxes layer for crop exemplars. "
+                        f"Draw ROI boxes on crop image '{crop_name}', then click "
+                        f"Scan Target Image by Tiles to scan target '{target_name}'."
+                    )
+                else:
+                    self._log(
+                        "Created/selected SAM3 boxes layer for exemplars. Draw ROI boxes "
+                        "around example objects, then click Run Preview."
+                    )
             else:
                 self._log(
                     "Created/selected SAM3 boxes layer. Draw box prompts, then click Run Preview."
@@ -2821,6 +2992,9 @@ class AdvancedModePanel(QWidget):
             self._log("Text prompt mode selected. Enter a phrase, then click Run Preview.")
 
         self._refresh_layers()
+        if preserve_target_name:
+            self._select_combo_data(self.image_layer_combo, preserve_target_name)
+            self._refresh_exemplar_crop_layer_combo()
         if layer_name is not None:
             if tool == PROMPT_POINTS:
                 self._select_combo_data(self.points_layer_combo, layer_name)

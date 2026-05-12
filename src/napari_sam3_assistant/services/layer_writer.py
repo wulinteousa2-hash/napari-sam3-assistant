@@ -24,12 +24,12 @@ class LayerWriter:
         boxes_name: str = "SAM3 boxes",
         update_boxes: bool = True,
     ) -> None:
-        translate = self._result_translate(result)
+        transform = self._result_transform(result)
 
         if result.labels is not None:
-            self._upsert_labels(labels_name, result.labels, translate=translate)
+            self._upsert_labels(labels_name, result.labels, transform=transform)
         elif result.masks is not None:
-            self._upsert_image(mask_name, result.masks.astype(np.float32), translate=translate)
+            self._upsert_image(mask_name, result.masks.astype(np.float32), transform=transform)
 
         if update_boxes and result.boxes_xyxy is not None and len(result.boxes_xyxy):
             self._upsert_boxes(boxes_name, result.boxes_xyxy, result)
@@ -59,24 +59,18 @@ class LayerWriter:
         name: str,
         data: np.ndarray,
         *,
-        translate: tuple[float, float] | None = None,
+        transform: dict[str, object] | None = None,
     ) -> None:
         arr = data.astype(np.uint32, copy=False)
         layer = self._get_layer(name)
         if layer is None:
             kwargs = {"name": name}
-            if translate is not None:
-                kwargs["translate"] = translate
+            if transform:
+                kwargs.update(transform)
             self.viewer.add_labels(arr, **kwargs)
         else:
             layer.data = arr
-            if translate is not None:
-                layer.translate = translate
-            else:
-                try:
-                    layer.translate = (0.0,) * arr.ndim
-                except Exception:
-                    pass
+            self._apply_transform(layer, transform, arr.ndim)
             layer.refresh()
 
     def _upsert_image(
@@ -84,36 +78,65 @@ class LayerWriter:
         name: str,
         data: np.ndarray,
         *,
-        translate: tuple[float, float] | None = None,
+        transform: dict[str, object] | None = None,
     ) -> None:
         layer = self._get_layer(name)
         if layer is None:
             kwargs = {"name": name}
-            if translate is not None:
-                kwargs["translate"] = translate
+            if transform:
+                kwargs.update(transform)
             self.viewer.add_image(data, **kwargs)
         else:
             layer.data = data
-            if translate is not None:
-                layer.translate = translate
-            else:
-                try:
-                    layer.translate = (0.0,) * data.ndim
-                except Exception:
-                    pass
+            self._apply_transform(layer, transform, data.ndim)
             layer.refresh()
 
-    def _result_translate(self, result: Sam3Result) -> tuple[float, float] | None:
+    def _result_transform(self, result: Sam3Result) -> dict[str, object] | None:
         result_space = str(result.metadata.get("result_space") or "")
         if result_space == "global_image":
-            return None
+            image_layer_name = result.metadata.get("image_layer")
+            if not image_layer_name:
+                return None
+            source = self._get_layer(str(image_layer_name))
+            if source is None:
+                return None
+            return self._layer_transform(source)
         if result_space != "roi_local":
             return None
         roi = result.metadata.get("large_image_roi")
         if not roi:
             return None
         y0, x0, _y1, _x1 = roi
-        return (float(y0), float(x0))
+        return {"translate": (float(y0), float(x0))}
+
+    def _layer_transform(self, layer) -> dict[str, object]:
+        transform: dict[str, object] = {}
+        for attr in ("scale", "translate", "rotate", "shear", "affine"):
+            try:
+                value = getattr(layer, attr)
+            except Exception:
+                continue
+            if value is not None:
+                transform[attr] = value
+        return transform
+
+    def _apply_transform(
+        self,
+        layer,
+        transform: dict[str, object] | None,
+        ndim: int,
+    ) -> None:
+        if transform:
+            for attr, value in transform.items():
+                try:
+                    setattr(layer, attr, value)
+                except Exception:
+                    pass
+            return
+        try:
+            layer.translate = (0.0,) * ndim
+        except Exception:
+            pass
 
     def _upsert_boxes(
         self,

@@ -5,13 +5,22 @@ from napari_sam3_assistant.services.layer_writer import LayerWriter
 
 
 class FakeLabelsLayer:
-    def __init__(self, data, name):
+    def __init__(self, data, name, **kwargs):
         self.data = data
         self.name = name
+        self.scale = kwargs.get("scale")
+        self.translate = kwargs.get("translate")
         self.refresh_count = 0
 
     def refresh(self):
         self.refresh_count += 1
+
+
+class FakeImageLayer:
+    def __init__(self, name, *, scale=(1.0, 1.0), translate=(0.0, 0.0)):
+        self.name = name
+        self.scale = scale
+        self.translate = translate
 
 
 class FakeLayers(dict):
@@ -23,8 +32,8 @@ class FakeViewer:
     def __init__(self):
         self.layers = FakeLayers()
 
-    def add_labels(self, data, name, **_kwargs):
-        layer = FakeLabelsLayer(data, name)
+    def add_labels(self, data, name, **kwargs):
+        layer = FakeLabelsLayer(data, name, **kwargs)
         self.layers[name] = layer
         return layer
 
@@ -75,3 +84,30 @@ def test_video_frame_writer_allows_nonempty_update_to_replace_existing_mask():
 
     layer = viewer.layers["SAM3 propagated preview labels"]
     np.testing.assert_array_equal(layer.data[1], second)
+
+
+def test_global_image_result_copies_source_image_transform():
+    viewer = FakeViewer()
+    viewer.layers["large"] = FakeImageLayer(
+        "large",
+        scale=(2.0, 3.0),
+        translate=(40.0, 50.0),
+    )
+    writer = LayerWriter(viewer)
+    labels = np.ones((4, 5), dtype=np.uint32)
+
+    writer.write_result(
+        Sam3Result(
+            task=Sam3Task.EXEMPLAR,
+            labels=labels,
+            metadata={
+                "image_layer": "large",
+                "result_space": "global_image",
+            },
+        ),
+        labels_name="SAM3 tiled exemplar labels",
+    )
+
+    layer = viewer.layers["SAM3 tiled exemplar labels"]
+    assert layer.scale == (2.0, 3.0)
+    assert layer.translate == (40.0, 50.0)

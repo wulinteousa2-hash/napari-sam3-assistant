@@ -2,6 +2,22 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.2.12
+
+### Added
+- Added external crop exemplar support for large-image tiled exemplar scans in Advanced mode.
+- Added `Exemplar source` controls for choosing between a target-image box and a separate crop image layer.
+- Added `Whole crop image` crop-region mode, which uses the full crop layer as the exemplar without requiring a Shapes box.
+- Added `Box from Shapes layer` crop-region mode, which crops one boxed exemplar from the selected crop image.
+
+### Changed
+- Renamed the tiled action to `Scan Target Image by Tiles` when a separate crop image is used.
+- Clarified the target/crop UI labels as `Target image to scan` and `Exemplar crop image`.
+- Kept the selected target image fixed while creating prompt boxes for the external crop workflow.
+- Filtered the crop-image selector so it does not offer the current target image.
+- Applied the target image layer transform to global tiled exemplar outputs so masks align to the large image XY placement.
+- Improved validation and logs when target image, crop image, or crop-region selection is incomplete.
+
 ## 4.2.10
 
 ### Added

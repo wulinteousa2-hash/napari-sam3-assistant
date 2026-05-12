@@ -39,6 +39,9 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     assert "Only change these if your image layout or detection behavior needs manual tuning." in advanced_source
     assert "Detection threshold" in advanced_source
     assert "Enable large-image local inference" in advanced_source
+    assert "Use separate crop image" in advanced_source
+    assert "Scan Target Image by Tiles" in advanced_source
+    assert "_collect_external_exemplar_patch" in advanced_source
     assert "512 x 512" in advanced_source
     assert "1024 x 1024" in advanced_source
     assert "2048 x 2048" in advanced_source

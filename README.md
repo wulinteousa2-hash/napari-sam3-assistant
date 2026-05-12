@@ -17,6 +17,20 @@ The plugin focuses on task-based segmentation workflows:
 
 
 
+## What's New in 4.2.12
+
+Version 4.2.12 adds an external crop exemplar workflow for large-image tiled scans. Select the large image as `Target image to scan`, choose a separate crop image as the exemplar source, then scan the target image tile by tile without needing to spatially register the crop back to the large image.
+
+- Added `Exemplar source` controls for Advanced `Exemplar segmentation` when large-image local inference is enabled.
+- Added `Use separate crop image` so a small crop layer can act as the visual exemplar while a larger image layer is scanned.
+- Added `Whole crop image` mode, which uses the entire crop layer as the exemplar and does not require a prompt box.
+- Added `Box from Shapes layer` mode, which crops one boxed ROI from the crop image before scanning the target.
+- Renamed the tiled action to `Scan Target Image by Tiles` when a separate crop image is used.
+- Kept the target image fixed while creating crop prompt boxes, so drawing on `image_crop` does not switch the scan target away from the large `image`.
+- Wrote tiled exemplar results with the target image layer transform, so output labels align to the large image XY placement instead of the crop layer.
+- Clarified validation and log messages around target image, crop image, and crop-region selection.
+
+
 ## What's New in 4.2.10
 
 Version 4.2.10 adds batch local exemplar segmentation for large 2D images and a clearer Mask Operations cleanup workflow. Pick one exemplar ROI, enable large-image local inference, then let SAM3 scan the full image tile by tile and compose the result back into one full-size labels layer.
