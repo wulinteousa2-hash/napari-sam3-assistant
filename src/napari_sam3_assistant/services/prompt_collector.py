@@ -8,6 +8,7 @@ from ..core.coordinates import base_image_data, extract_2d_image, infer_image_se
 from ..core.models import (
     BoxPrompt,
     ExemplarPrompt,
+    ImageSelection,
     MaskPrompt,
     PointPrompt,
     PromptBundle,
@@ -58,7 +59,7 @@ class PromptCollector:
             boxes, exemplars = self._collect_shapes(
                 viewer.layers[shapes_layer_name],
                 image_data,
-                selection.frame_index,
+                selection,
                 task,
                 collect_exemplar_rois=collect_exemplar_rois,
             )
@@ -89,7 +90,7 @@ class PromptCollector:
         self,
         layer: Any,
         image_data: np.ndarray,
-        frame_index: int | None,
+        selection: ImageSelection,
         task: Sam3Task,
         *,
         collect_exemplar_rois: bool = True,
@@ -108,7 +109,7 @@ class PromptCollector:
                 x0=x0,
                 y1=y1,
                 x1=x1,
-                frame_index=frame_index,
+                frame_index=selection.frame_index,
             )
 
             if task == Sam3Task.EXEMPLAR:
@@ -116,7 +117,7 @@ class PromptCollector:
                 boxes.append(box)
                 if not collect_exemplar_rois:
                     continue
-                roi = self._crop_exemplar(image_data, y0, x0, y1, x1)
+                roi = self._crop_exemplar(image_data, selection, y0, x0, y1, x1)
                 exemplars.append(
                     ExemplarPrompt(
                         roi=roi,
@@ -124,7 +125,7 @@ class PromptCollector:
                         x0=x0,
                         y1=y1,
                         x1=x1,
-                        frame_index=frame_index,
+                        frame_index=selection.frame_index,
                     )
                 )
             else:
@@ -177,13 +178,13 @@ class PromptCollector:
     def _crop_exemplar(
         self,
         image_data: np.ndarray,
+        selection: ImageSelection,
         y0: float,
         x0: float,
         y1: float,
         x1: float,
     ) -> np.ndarray:
         normalized = base_image_data(image_data)
-        selection = infer_image_selection("exemplar-source", self._data_shape(normalized))
         image = extract_2d_image(normalized, selection)
         height, width = image.shape[-2:]
         iy0 = max(0, min(height, int(np.floor(y0))))

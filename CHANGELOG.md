@@ -2,6 +2,13 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.2.13
+
+### Fixed
+- Fixed a napari `ValueError` when writing 2D SAM3 labels from a 3D image slice. Result layers now receive transforms that match the actual output dimensionality, so 2D labels from 3D source images keep the spatial Y/X transform without passing incompatible 3D transform values to napari.
+- Fixed 2D exemplar ROI cropping from 3D stacks so the exemplar crop is taken from the current viewer frame instead of defaulting to frame 0.
+- Added a regression test for 2D global-image results produced from 3D source image layers.
+
 ## 4.2.12
 
 ### Added

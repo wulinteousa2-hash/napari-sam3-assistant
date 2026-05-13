@@ -17,6 +17,16 @@ The plugin focuses on task-based segmentation workflows:
 
 
 
+## What's New in 4.2.13
+
+Version 4.2.13 fixes result-layer writing for 2D SAM3 outputs produced from 3D image slices.
+
+- Fixed a napari `ValueError` when 2D exemplar or segmentation results were written from a 3D source image with 3D layer transforms.
+- Result labels now keep the spatial Y/X transform from the source layer while dropping transform components that do not match the 2D output layer.
+- Fixed 2D exemplar ROI cropping on 3D stacks so the exemplar patch comes from the current viewer frame.
+- Added a regression test covering 2D global-image labels written from a 3D source image.
+
+
 ## What's New in 4.2.12
 
 Version 4.2.12 adds an external crop exemplar workflow for large-image tiled scans. Select the large image as `Target image to scan`, choose a separate crop image as the exemplar source, then scan the target image tile by tile without needing to spatially register the crop back to the large image.

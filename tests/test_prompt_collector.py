@@ -107,6 +107,35 @@ def test_exemplar_shapes_are_collected_as_boxes_and_roi_metadata():
     assert bundle.exemplars[0].roi.shape == (4, 4)
 
 
+def test_exemplar_roi_crop_uses_current_stack_frame():
+    image_data = np.zeros((3, 8, 8), dtype=np.uint8)
+    image_data[0, 2:6, 3:7] = 11
+    image_data[2, 2:6, 3:7] = 99
+    image = SimpleNamespace(name="image", data=image_data)
+    rectangle = np.asarray(
+        [
+            [2.0, 3.0],
+            [2.0, 7.0],
+            [6.0, 7.0],
+            [6.0, 3.0],
+        ]
+    )
+    shapes = SimpleNamespace(name="shapes", data=[rectangle], shape_type=["rectangle"])
+    viewer = _viewer({"image": image, "shapes": shapes}, current_step=(2, 0, 0))
+
+    bundle = PromptCollector().collect(
+        viewer,
+        image_layer_name="image",
+        task=Sam3Task.EXEMPLAR,
+        shapes_layer_name="shapes",
+    )
+
+    assert bundle.boxes[0].frame_index == 2
+    assert bundle.exemplars[0].frame_index == 2
+    assert bundle.exemplars[0].roi.shape == (4, 4)
+    assert np.all(bundle.exemplars[0].roi == 99)
+
+
 def test_labels_prompt_selects_current_frame_from_stack():
     image = SimpleNamespace(name="image", data=np.zeros((3, 8, 8), dtype=np.uint8))
     labels_data = np.zeros((3, 8, 8), dtype=np.uint8)

@@ -10,6 +10,9 @@ class FakeLabelsLayer:
         self.name = name
         self.scale = kwargs.get("scale")
         self.translate = kwargs.get("translate")
+        self.rotate = kwargs.get("rotate")
+        self.shear = kwargs.get("shear")
+        self.affine = kwargs.get("affine")
         self.refresh_count = 0
 
     def refresh(self):
@@ -17,10 +20,22 @@ class FakeLabelsLayer:
 
 
 class FakeImageLayer:
-    def __init__(self, name, *, scale=(1.0, 1.0), translate=(0.0, 0.0)):
+    def __init__(
+        self,
+        name,
+        *,
+        scale=(1.0, 1.0),
+        translate=(0.0, 0.0),
+        rotate=None,
+        shear=None,
+        affine=None,
+    ):
         self.name = name
         self.scale = scale
         self.translate = translate
+        self.rotate = rotate
+        self.shear = shear
+        self.affine = affine
 
 
 class FakeLayers(dict):
@@ -111,3 +126,37 @@ def test_global_image_result_copies_source_image_transform():
     layer = viewer.layers["SAM3 tiled exemplar labels"]
     assert layer.scale == (2.0, 3.0)
     assert layer.translate == (40.0, 50.0)
+
+
+def test_global_image_2d_result_from_3d_source_uses_spatial_transform_only():
+    viewer = FakeViewer()
+    viewer.layers["stack"] = FakeImageLayer(
+        "stack",
+        scale=(4.0, 2.0, 3.0),
+        translate=(9.0, 40.0, 50.0),
+        rotate=np.eye(3),
+        shear=(0.1, 0.2, 0.3),
+        affine=object(),
+    )
+    writer = LayerWriter(viewer)
+    labels = np.ones((4, 5), dtype=np.uint32)
+
+    writer.write_result(
+        Sam3Result(
+            task=Sam3Task.EXEMPLAR,
+            labels=labels,
+            frame_index=4,
+            metadata={
+                "image_layer": "stack",
+                "result_space": "global_image",
+            },
+        ),
+        labels_name="SAM3 preview labels",
+    )
+
+    layer = viewer.layers["SAM3 preview labels"]
+    assert layer.scale == (2.0, 3.0)
+    assert layer.translate == (40.0, 50.0)
+    np.testing.assert_array_equal(layer.rotate, np.eye(2))
+    assert layer.shear is None
+    assert layer.affine is None

@@ -62,15 +62,16 @@ class LayerWriter:
         transform: dict[str, object] | None = None,
     ) -> None:
         arr = data.astype(np.uint32, copy=False)
+        fitted_transform = self._fit_transform_to_ndim(transform, arr.ndim)
         layer = self._get_layer(name)
         if layer is None:
             kwargs = {"name": name}
-            if transform:
-                kwargs.update(transform)
+            if fitted_transform:
+                kwargs.update(fitted_transform)
             self.viewer.add_labels(arr, **kwargs)
         else:
             layer.data = arr
-            self._apply_transform(layer, transform, arr.ndim)
+            self._apply_transform(layer, fitted_transform, arr.ndim)
             layer.refresh()
 
     def _upsert_image(
@@ -80,15 +81,16 @@ class LayerWriter:
         *,
         transform: dict[str, object] | None = None,
     ) -> None:
+        fitted_transform = self._fit_transform_to_ndim(transform, data.ndim)
         layer = self._get_layer(name)
         if layer is None:
             kwargs = {"name": name}
-            if transform:
-                kwargs.update(transform)
+            if fitted_transform:
+                kwargs.update(fitted_transform)
             self.viewer.add_image(data, **kwargs)
         else:
             layer.data = data
-            self._apply_transform(layer, transform, data.ndim)
+            self._apply_transform(layer, fitted_transform, data.ndim)
             layer.refresh()
 
     def _result_transform(self, result: Sam3Result) -> dict[str, object] | None:
@@ -119,6 +121,92 @@ class LayerWriter:
             if value is not None:
                 transform[attr] = value
         return transform
+
+    def _fit_transform_to_ndim(
+        self,
+        transform: dict[str, object] | None,
+        ndim: int,
+    ) -> dict[str, object] | None:
+        if not transform:
+            return None
+
+        fitted: dict[str, object] = {}
+        for attr, value in transform.items():
+            if attr in {"scale", "translate"}:
+                fill_value = 1.0 if attr == "scale" else 0.0
+                vector = self._fit_vector_transform(value, ndim, fill_value)
+                if vector is not None:
+                    fitted[attr] = vector
+            elif attr == "rotate":
+                rotate = self._fit_rotate_transform(value, ndim)
+                if rotate is not None:
+                    fitted[attr] = rotate
+            elif attr == "shear":
+                shear = self._fit_shear_transform(value, ndim)
+                if shear is not None:
+                    fitted[attr] = shear
+            elif attr == "affine":
+                if self._transform_ndim(value) == ndim:
+                    fitted[attr] = value
+            else:
+                fitted[attr] = value
+        return fitted or None
+
+    def _fit_vector_transform(
+        self,
+        value: object,
+        ndim: int,
+        fill_value: float,
+    ) -> tuple[float, ...] | None:
+        try:
+            arr = np.asarray(value, dtype=float).reshape(-1)
+        except Exception:
+            return None
+        if arr.size == 0:
+            return None
+        if arr.size == ndim:
+            return tuple(float(v) for v in arr)
+        if arr.size > ndim:
+            return tuple(float(v) for v in arr[-ndim:])
+        padded = np.pad(arr, (ndim - arr.size, 0), constant_values=fill_value)
+        return tuple(float(v) for v in padded)
+
+    def _fit_rotate_transform(self, value: object, ndim: int) -> np.ndarray | None:
+        try:
+            arr = np.asarray(value, dtype=float)
+        except Exception:
+            return None
+        if arr.shape == (ndim, ndim):
+            return arr
+        if arr.ndim == 2 and arr.shape[0] == arr.shape[1] and arr.shape[0] > ndim:
+            return arr[-ndim:, -ndim:]
+        return None
+
+    def _fit_shear_transform(self, value: object, ndim: int) -> tuple[float, ...] | None:
+        expected = ndim * (ndim - 1) // 2
+        try:
+            arr = np.asarray(value, dtype=float).reshape(-1)
+        except Exception:
+            return None
+        if arr.size == expected:
+            return tuple(float(v) for v in arr)
+        return None
+
+    def _transform_ndim(self, value: object) -> int | None:
+        for attr in ("ndim",):
+            try:
+                ndim = getattr(value, attr)
+            except Exception:
+                continue
+            if isinstance(ndim, int):
+                return ndim
+        try:
+            matrix = np.asarray(getattr(value, "affine_matrix"))
+        except Exception:
+            return None
+        if matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1] and matrix.shape[0] > 1:
+            return int(matrix.shape[0] - 1)
+        return None
 
     def _apply_transform(
         self,
