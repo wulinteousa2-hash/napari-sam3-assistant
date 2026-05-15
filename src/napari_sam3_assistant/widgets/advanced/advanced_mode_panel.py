@@ -1716,39 +1716,51 @@ class AdvancedModePanel(QWidget):
             self._log("Enable large-image local inference before scanning the full image by tiles.")
             self.activity_status.set_ready()
             return
-        try:
-            bundle = self._collect_bundle_for_tiled_exemplar()
-        except Exception as exc:
-            self._log(f"Cannot collect exemplar prompt: {exc}")
-            self.activity_status.set_ready()
-            return
-        try:
-            exemplar, exemplar_source_name = self._collect_tiled_exemplar_patch(bundle)
-        except Exception as exc:
-            self._log(f"Cannot collect exemplar source: {exc}")
-            self.activity_status.set_ready()
-            return
-        cpu_error = self._cpu_bundle_support_error(bundle)
-        if cpu_error:
-            self._log(cpu_error)
-            self.activity_status.set_ready()
-            return
-        image_layer = self.viewer.layers[bundle.image.layer_name]
-        image_hw = self._selection_image_hw(bundle.image)
         roi_hw = self._selected_roi_size()
-        exemplar_hw = tuple(int(value) for value in np.asarray(exemplar).shape[:2])
-        if exemplar_hw[0] > roi_hw[0] or exemplar_hw[1] > roi_hw[1]:
-            self._log(
-                "The exemplar crop is larger than the tile size. "
-                "Select a smaller crop or increase ROI size."
-            )
-            self.activity_status.set_ready()
-            return
         overlap_fraction = float(self.tile_overlap_spin.value()) / 100.0
         merge_tile_seams = bool(self.merge_tile_seams_check.isChecked())
-        tiles = self._tile_bounds_for_image(image_hw, roi_hw, overlap_fraction)
-        if not tiles:
-            self._log("No tiles were generated for the selected image.")
+        target_layer_names = self._tiled_exemplar_target_layer_names()
+        if not target_layer_names:
+            self._log("No image layers found for tiled exemplar scanning.")
+            self.activity_status.set_ready()
+            return
+        jobs: list[dict[str, Any]] = []
+        external_exemplar: tuple[np.ndarray, str] | None = None
+        try:
+            if self._external_exemplar_source_enabled():
+                external_exemplar = self._collect_external_exemplar_patch()
+            for layer_name in target_layer_names:
+                bundle = self._collect_bundle_for_tiled_exemplar(layer_name)
+                if external_exemplar is None:
+                    exemplar, exemplar_source_name = self._collect_tiled_exemplar_patch(bundle)
+                else:
+                    exemplar, exemplar_source_name = external_exemplar
+                cpu_error = self._cpu_bundle_support_error(bundle)
+                if cpu_error:
+                    raise RuntimeError(cpu_error)
+                image_layer = self.viewer.layers[bundle.image.layer_name]
+                image_hw = self._selection_image_hw(bundle.image)
+                exemplar_hw = tuple(int(value) for value in np.asarray(exemplar).shape[:2])
+                if exemplar_hw[0] > roi_hw[0] or exemplar_hw[1] > roi_hw[1]:
+                    raise RuntimeError(
+                        "The exemplar crop is larger than the tile size. "
+                        "Select a smaller crop or increase ROI size."
+                    )
+                tiles = self._tile_bounds_for_image(image_hw, roi_hw, overlap_fraction)
+                if not tiles:
+                    raise RuntimeError(f"No tiles were generated for image layer '{layer_name}'.")
+                jobs.append(
+                    {
+                        "bundle": bundle,
+                        "image_layer": image_layer,
+                        "image_hw": image_hw,
+                        "exemplar": np.asarray(exemplar),
+                        "exemplar_source_name": exemplar_source_name,
+                        "tiles": tiles,
+                    }
+                )
+        except Exception as exc:
+            self._log(f"Cannot collect tiled exemplar scan inputs: {exc}")
             self.activity_status.set_ready()
             return
         try:
@@ -1757,89 +1769,133 @@ class AdvancedModePanel(QWidget):
             self._log(f"Cannot run tiled exemplar scan: {exc}")
             self.activity_status.set_ready()
             return
+        batch_mode = len(jobs) > 1
         self._clear_results_table()
         self._show_active_roi_overlay(
-            bundle.image.layer_name,
+            "batch" if batch_mode else jobs[0]["bundle"].image.layer_name,
             None,
-            extra_bounds=[(bundle.image.layer_name, bounds) for bounds in tiles],
+            extra_bounds=[
+                (job["bundle"].image.layer_name, bounds)
+                for job in jobs
+                for bounds in job["tiles"]
+            ],
         )
 
         @thread_worker
         def run_tiled_exemplar():
-            self._ensure_image_adapter_loaded_for_bundle(adapter, bundle)
-            composed = np.zeros(image_hw, dtype=np.uint32)
-            next_object_id = 1
-            total = len(tiles)
-            for index, bounds in enumerate(tiles, start=1):
-                yield f"Tiled exemplar scan {index}/{total}: y={bounds.y0}:{bounds.y1}, x={bounds.x0}:{bounds.x1}"
-                tile = extract_2d_roi(image_layer.data, bundle.image, bounds)
-                augmented, tile_origin, exemplar_box = self._augmented_exemplar_tile(tile, exemplar)
-                tile_bundle = self._bundle_for_augmented_exemplar(bundle, augmented, exemplar_box)
-                result = adapter.run_image(
-                    augmented,
-                    tile_bundle,
-                    cache_context=self._cache_context_for_layer(
-                        image_layer,
-                        bundle,
-                        roi_bounds=bounds,
-                    ),
+            total_jobs = len(jobs)
+            for job_index, job in enumerate(jobs, start=1):
+                bundle = job["bundle"]
+                image_layer = job["image_layer"]
+                image_hw = job["image_hw"]
+                exemplar = job["exemplar"]
+                exemplar_source_name = job["exemplar_source_name"]
+                tiles = job["tiles"]
+                self._ensure_image_adapter_loaded_for_bundle(adapter, bundle)
+                composed = np.zeros(image_hw, dtype=np.uint32)
+                next_object_id = 1
+                total_tiles = len(tiles)
+                for tile_index, bounds in enumerate(tiles, start=1):
+                    yield (
+                        f"Tiled exemplar scan {job_index}/{total_jobs} "
+                        f"'{bundle.image.layer_name}' tile {tile_index}/{total_tiles}: "
+                        f"y={bounds.y0}:{bounds.y1}, x={bounds.x0}:{bounds.x1}"
+                    )
+                    tile = extract_2d_roi(image_layer.data, bundle.image, bounds)
+                    augmented, tile_origin, exemplar_box = self._augmented_exemplar_tile(tile, exemplar)
+                    tile_bundle = self._bundle_for_augmented_exemplar(bundle, augmented, exemplar_box)
+                    result = adapter.run_image(
+                        augmented,
+                        tile_bundle,
+                        cache_context=self._cache_context_for_layer(
+                            image_layer,
+                            bundle,
+                            roi_bounds=bounds,
+                        ),
+                    )
+                    local_labels = self._result_labels_for_tile(
+                        result,
+                        augmented.shape,
+                        tile_origin,
+                        (bounds.height, bounds.width),
+                    )
+                    next_object_id = self._compose_tile_labels(
+                        composed,
+                        local_labels,
+                        bounds,
+                        next_object_id,
+                    )
+                seam_merge_count = 0
+                if merge_tile_seams:
+                    composed, seam_merge_count = self._merge_tile_seam_labels(
+                        composed,
+                        tiles,
+                        dilation_px=2,
+                        min_contact_pixels=8,
+                    )
+                yield Sam3Result(
+                    task=Sam3Task.EXEMPLAR,
+                    labels=composed,
+                    metadata={
+                        "image_layer": bundle.image.layer_name,
+                        "large_image_mode": True,
+                        "large_image_tiled_scan": True,
+                        "large_image_hw": image_hw,
+                        "tile_count": total_tiles,
+                        "tile_size": roi_hw,
+                        "tile_overlap_percent": int(self.tile_overlap_spin.value()),
+                        "tile_seam_merge_enabled": merge_tile_seams,
+                        "tile_seam_merge_count": seam_merge_count,
+                        "tile_seam_merge_dilation_px": 2,
+                        "tile_seam_merge_min_contact_pixels": 8,
+                        "exemplar_source_layer": exemplar_source_name,
+                        "external_exemplar_source": self._external_exemplar_source_enabled(),
+                        "batch_tiled_exemplar": batch_mode,
+                        "result_space": "global_image",
+                    },
                 )
-                local_labels = self._result_labels_for_tile(result, augmented.shape, tile_origin, (bounds.height, bounds.width))
-                next_object_id = self._compose_tile_labels(
-                    composed,
-                    local_labels,
-                    bounds,
-                    next_object_id,
-                )
-            seam_merge_count = 0
-            if merge_tile_seams:
-                composed, seam_merge_count = self._merge_tile_seam_labels(
-                    composed,
-                    tiles,
-                    dilation_px=2,
-                    min_contact_pixels=8,
-                )
-            result = Sam3Result(
-                task=Sam3Task.EXEMPLAR,
-                labels=composed,
-                metadata={
-                    "image_layer": bundle.image.layer_name,
-                    "large_image_mode": True,
-                    "large_image_tiled_scan": True,
-                    "large_image_hw": image_hw,
-                    "tile_count": total,
-                    "tile_size": roi_hw,
-                    "tile_overlap_percent": int(self.tile_overlap_spin.value()),
-                    "tile_seam_merge_enabled": merge_tile_seams,
-                    "tile_seam_merge_count": seam_merge_count,
-                    "tile_seam_merge_dilation_px": 2,
-                    "tile_seam_merge_min_contact_pixels": 8,
-                    "exemplar_source_layer": exemplar_source_name,
-                    "external_exemplar_source": self._external_exemplar_source_enabled(),
-                    "result_space": "global_image",
-                },
-            )
-            return result
+
+        def handle_tiled_exemplar_output(payload: object) -> None:
+            if isinstance(payload, Sam3Result):
+                if batch_mode:
+                    self._write_batch_image_result(payload)
+                else:
+                    self._write_image_result(payload)
+                return
+            self._log(str(payload))
 
         worker = run_tiled_exemplar()
-        worker.yielded.connect(self._log)
-        worker.returned.connect(self._write_image_result)
+        worker.yielded.connect(handle_tiled_exemplar_output)
         self._start_worker(worker)
+        total_tiles = sum(len(job["tiles"]) for job in jobs)
         self._log(
-            f"Started full-image tiled exemplar scan: {len(tiles)} tile(s), "
+            f"Started full-image tiled exemplar scan: {len(jobs)} image layer(s), {total_tiles} tile(s), "
             f"tile size {roi_hw[1]} x {roi_hw[0]}, overlap {self.tile_overlap_spin.value()}%, "
             f"seam merge {'ON' if merge_tile_seams else 'OFF'}."
         )
         if self._external_exemplar_source_enabled():
+            exemplar_source_name = jobs[0]["exemplar_source_name"]
             self._log(
                 f"Using crop layer '{exemplar_source_name}' as exemplar source and scanning "
-                f"target image '{bundle.image.layer_name}' by tiles."
+                f"{len(jobs)} target image layer(s) by tiles."
             )
 
-    def _collect_bundle_for_tiled_exemplar(self) -> PromptBundle:
+    def _tiled_exemplar_target_layer_names(self) -> list[str]:
+        if self.viewer is None:
+            return []
+        if not self.batch_all_images_check.isChecked():
+            return [self._current_image_layer_name()]
+        crop_layer_name = (
+            self._optional_combo_data(self.exemplar_crop_layer_combo)
+            if self._external_exemplar_source_enabled()
+            else ""
+        )
+        return [name for name in self._layer_names({"image"}) if name and name != crop_layer_name]
+
+    def _collect_bundle_for_tiled_exemplar(self, image_layer_name: str | None = None) -> PromptBundle:
         if self.viewer is None:
             raise RuntimeError("No napari viewer was provided to the widget.")
-        image_layer_name = self._current_image_layer_name()
+        image_layer_name = image_layer_name or self._current_image_layer_name()
         if not image_layer_name:
             raise RuntimeError("Select an image layer first.")
         channel_axis = self.channel_axis_spin.value()

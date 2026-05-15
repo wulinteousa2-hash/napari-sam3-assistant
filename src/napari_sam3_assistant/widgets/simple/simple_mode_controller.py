@@ -364,6 +364,16 @@ class SimpleModeController(QObject):
         check = getattr(owner, "large_image_check", None)
         return bool(check is not None and check.isChecked())
 
+    def set_batch_all_image_layers_enabled(self, enabled: bool) -> None:
+        check = getattr(self.owner, "batch_all_images_check", None)
+        if check is not None:
+            check.setChecked(bool(enabled))
+        self.state_changed.emit()
+
+    def batch_all_image_layers_enabled(self) -> bool:
+        check = getattr(self.owner, "batch_all_images_check", None)
+        return bool(check is not None and check.isChecked())
+
     def roi_size_items(self) -> list[tuple[str, object]]:
         combo = getattr(self.owner, "roi_size_combo", None)
         if combo is None:

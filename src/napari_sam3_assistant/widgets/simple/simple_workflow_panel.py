@@ -59,6 +59,14 @@ class SimpleWorkflowPanel(QGroupBox):
         self.exemplar_large_check = QCheckBox("Enable local/tiled inference")
         self.exemplar_large_check.setChecked(True)
         self.exemplar_large_check.toggled.connect(lambda checked: self.controller.set_large_image_enabled(bool(checked)))
+        self.exemplar_batch_layers_check = QCheckBox("Batch all image layers")
+        self.exemplar_batch_layers_check.setToolTip(
+            "Run the exemplar workflow on every Image layer already loaded in napari. "
+            "Use this when each layer is a separate target image."
+        )
+        self.exemplar_batch_layers_check.toggled.connect(
+            lambda checked: self.controller.set_batch_all_image_layers_enabled(bool(checked))
+        )
         self.roi_size_combo = QComboBox()
         self.roi_size_combo.currentIndexChanged.connect(lambda _i: self.controller.set_roi_size(self.roi_size_combo.currentData()))
         self.tile_overlap_spin = QSpinBox()
@@ -120,7 +128,8 @@ class SimpleWorkflowPanel(QGroupBox):
             self._sync_combo_items(self.roi_size_combo, self.controller.roi_size_items(), self.controller.current_roi_size())
             self.tile_overlap_spin.setValue(self.controller.current_tile_overlap())
             self.merge_seams_check.setChecked(self.controller.merge_tile_seams_enabled())
-            self.exemplar_large_check.setChecked(self.controller.large_image_enabled() or task == Sam3Task.EXEMPLAR)
+            self.exemplar_large_check.setChecked(self.controller.large_image_enabled())
+            self.exemplar_batch_layers_check.setChecked(self.controller.batch_all_image_layers_enabled())
             self._sync_combo_items(
                 self.crop_image_combo,
                 [(name, name) for name in self.controller.crop_image_layer_names()],
@@ -175,6 +184,7 @@ class SimpleWorkflowPanel(QGroupBox):
         form.addRow("Crop image", self.crop_image_combo)
         form.addRow("Crop region", self.crop_region_combo)
         form.addRow("", self.exemplar_large_check)
+        form.addRow("", self.exemplar_batch_layers_check)
         form.addRow("Tile size", self.roi_size_combo)
         form.addRow("Tile overlap", self.tile_overlap_spin)
         form.addRow("", self.merge_seams_check)
@@ -300,6 +310,7 @@ class SimpleWorkflowPanel(QGroupBox):
             if label is not None:
                 label.setVisible(use_crop)
         large = self.exemplar_large_check.isChecked()
+        self.exemplar_batch_layers_check.setEnabled(large)
         self.roi_size_combo.setEnabled(large)
         self.tile_overlap_spin.setEnabled(large)
         self.merge_seams_check.setEnabled(large)

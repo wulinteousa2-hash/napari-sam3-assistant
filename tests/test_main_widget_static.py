@@ -34,6 +34,9 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     assert "3D Multiplex" in simple_workflow_source
     assert "Scan Full Image" in simple_workflow_source
     assert "Use crop image" in simple_workflow_source
+    assert "Batch all image layers" in simple_workflow_source
+    assert "setChecked(self.controller.large_image_enabled())" in simple_workflow_source
+    assert "batch_all_image_layers_enabled" in simple_workflow_source
     assert 'model_type="sam3.1"' in simple_workflow_source
     assert "QPlainTextEdit" in simple_run_source
     assert "SimpleModelPanel" in simple_model_source
