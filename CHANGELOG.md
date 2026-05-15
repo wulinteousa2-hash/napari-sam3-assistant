@@ -2,6 +2,17 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.3.1
+
+### Changed
+- Copied selected image-layer geometry to SAM3 prompt layers, preview labels, and active ROI overlays so Simple and Advanced local ROI/tiled workflows align correctly on transformed OME-Zarr layers.
+- Kept Simple Exemplar `Batch all image layers` independent from `Enable local/tiled inference` and kept batch Save && Clean behavior for all batch preview masks.
+
+### Fixed
+- Fixed Simple/Advanced OME-Zarr local ROI and tiled exemplar workflows where prompt boxes or points could be interpreted in the wrong coordinate system, producing empty masks while the same image worked as TIFF.
+- Fixed the Mask Cleanup axon hole right-click action by keeping the inserted `QAction` object instead of overwriting it with PyQt's `None` return value.
+- Fixed Save && Clean cleanup for exact tiled exemplar preview layers.
+
 ## 4.3.0
 
 ### Changed

@@ -17,79 +17,19 @@ The plugin focuses on task-based segmentation workflows:
 
 
 
-## What's New in 4.3.0
+## What's New in 4.3.1
 
-Version 4.3.0 refactors Simple mode into task-focused workflows while keeping Advanced mode intact.
+Version 4.3.1 focuses on making Simple/Advanced local ROI workflows reliable for transformed OME-Zarr layers and tightening the current Simple Exemplar and Mask Cleanup workflow.
 
-- Simple now opens around concrete tasks: `Exemplar`, `Live Points`, `3D Multiplex`, `Cleanup`, `2D Slice`, and `Text`.
-- Exemplar exposes local ROI inference, full-image tiled scans, external crop exemplars, tile overlap, seam merging, and compact save controls.
-- In Simple Exemplar, `Scan Full Image` is now in the `Run` panel next to `Run Current ROI`, and tiled scan results immediately enable `Save Labels` and `Save && Clean`.
-- Simple Exemplar can batch full-image tiled scans across all Image layers already loaded in napari.
-- Live Points adds a right-click `Accept + Clear` workflow that accumulates previews into `SAM3 live accepted labels` and immediately returns to point placement.
-- Simple now has compact `Run`, `Output`, and `Activity` controls, including output folder and mask format selection for `Save && Clean`.
-- Simple model controls moved into a collapsed `Model` section, and the global header hides Advanced-only model controls while Simple is active so the mode buttons stay readable.
-- `3D Multiplex` selects SAM3.1 automatically, while 2D task workflows keep using the SAM3 image model.
-- Mask Cleanup right-click delete/assign actions now return the Labels layer to `pick` mode instead of continuing an old paint or erase tool.
-
-
-## What's New in 4.2.12
-
-Version 4.2.12 adds an external crop exemplar workflow for large-image tiled scans. Select the large image as `Target image to scan`, choose a separate crop image as the exemplar source, then scan the target image tile by tile without needing to spatially register the crop back to the large image.
-
-- Added `Exemplar source` controls for Advanced `Exemplar segmentation` when large-image local inference is enabled.
-- Added `Use separate crop image` so a small crop layer can act as the visual exemplar while a larger image layer is scanned.
-- Added `Whole crop image` mode, which uses the entire crop layer as the exemplar and does not require a prompt box.
-- Added `Box from Shapes layer` mode, which crops one boxed ROI from the crop image before scanning the target.
-- Renamed the tiled action to `Scan Target Image by Tiles` when a separate crop image is used.
-- Kept the target image fixed while creating crop prompt boxes, so drawing on `image_crop` does not switch the scan target away from the large `image`.
-- Wrote tiled exemplar results with the target image layer transform, so output labels align to the large image XY placement instead of the crop layer.
-- Clarified validation and log messages around target image, crop image, and crop-region selection.
-
-
-## What's New in 4.2.10
-
-Version 4.2.10 adds batch local exemplar segmentation for large 2D images and a clearer Mask Operations cleanup workflow. Pick one exemplar ROI, enable large-image local inference, then let SAM3 scan the full image tile by tile and compose the result back into one full-size labels layer.
-
-![Batch local exemplar segmentation scans large images tile by tile](docs/tiled_exemplar_scan.png)
-
-- Added `Scan Full Image by Tiles` for Advanced `Exemplar segmentation` when large-image local inference is enabled.
-- The local ROI size becomes the tile size, so a 6k x 6k image can be processed as many smaller SAM3 calls instead of one oversized inference.
-- Added `Tile overlap` control, default `15%`, to reduce edge misses between neighboring tiles.
-- Added `Merge seam-split objects`, enabled by default, to reconnect objects cut by straight tile boundaries after stitching.
-- Composed all tile results into `SAM3 tiled exemplar labels` with full original image shape.
-- Renamed the normal run action in this mode to `Run Current ROI Only`, making the difference between one local test tile and full-image scanning clear.
-- Added clearer progress and output naming so users can tell whether they ran a single ROI or a full tiled scan.
-- Reorganized `Mask Cleanup / Multiclass` so `Local Edit` stays general-purpose instead of showing myelin/axon-specific controls.
-- Added a dedicated `Myelin / Axon Rings` tab with one-click `Create Myelin + Axon Layers` output.
-- Moved the detailed axon proposal table and review/export buttons into collapsed `Advanced review`.
-
-
-## What's New in 4.2.0
-
-Version 4.2.0 adds experimental CPU-only support for SAM3.0 2D image workflows when using a CPU-safe `sam3` backend such as `sam3-cpu`.
-
-- CPU-only setup is documented in [docs/cpu_only.md](docs/cpu_only.md).
-- Device mode is now environment-driven and shown as an indicator; normal users no longer need to choose CPU or GPU manually.
-- Advanced manual device override is available only for backend testing with `NAPARI_SAM3_ENABLE_DEVICE_OVERRIDE=1`.
-- SAM3.0 2D CPU workflows are enabled for points, boxes, text, exemplar, and Live Points when the installed `sam3` backend supports CPU model construction.
-- SAM3.1, 3D/video propagation, and SAM3 video-predictor workflows remain CUDA/GPU-only in this plugin.
-- Model-folder setup now passes the detected BPE tokenizer path to SAM3 and can create `bpe_simple_vocab_16e6.txt.gz` automatically from `merges.txt`.
-- The plugin reports a clear upstream CPU-support limitation if a non-CPU-safe SAM3 backend still allocates CUDA tensors during CPU image model construction.
-
-
-
-## What's New in 4.0.0
-Version 4.0.0 was a workflow release focused on the new Simple mode and a cleaner Advanced mode.
-
-- New `Simple` mode for common imaging tasks with a compact one-column layout.
-- `Advanced` mode keeps the full manual UI for model setup, batch work, large-image ROI settings, result tables, mask operations, and detailed logs.
-- The mode selector stays visible, so users can move between Simple and Advanced without restarting napari.
-- Simple mode uses the same SAM3 execution path and writes the same napari preview layers as Advanced mode.
-- Simple mode keeps common tasks short: choose the image/task, add or enter the prompt, then run preview.
-- Simple mode includes `Mask Ops` in the Run area to open the standalone mask cleanup widget for preview labels.
-- Simple mode uses SAM3.0 for 2D image tasks so Advanced SAM3.1 video-model settings do not break Simple image segmentation.
-- Device selection is explicit. `GPU / CUDA` is recommended for full SAM3 functionality; `CPU` is experimental for SAM3.0 2D image workflows and requires a CPU-safe SAM3 backend.
-- Live Points are still available with `T` for next point mode and `Shift+T` to flip selected or latest points.
+- Prompt layers now copy the selected image layer geometry. Boxes, points, labels prompts, preview labels, and active ROI overlays stay aligned on OME-Zarr layers with physical scale metadata.
+- OME-Zarr local ROI and tiled exemplar workflows now use the same visible coordinates users draw on, avoiding empty SAM3 masks caused by scale/coordinate mismatch.
+- Simple remains task-focused with `Exemplar`, `Live Points`, `3D Multiplex`, `Cleanup`, `2D Slice`, and `Text`.
+- Simple Exemplar keeps `Scan Full Image` in the `Run` panel next to `Run Current ROI`.
+- Simple Exemplar can batch across all Image layers already loaded in napari, and `Batch all image layers` can be enabled independently from `Enable local/tiled inference`.
+- `Save Labels` and `Save && Clean` activate after tiled scan results, and `Save && Clean` exports all batch preview mask layers.
+- Live Points supports right-click `Accept + Clear` into `SAM3 live accepted labels` so users can rapidly accept one-point previews and continue.
+- Mask Cleanup right-click delete/assign returns Labels layers to `pick` mode, and the axon hole click context action no longer crashes on PyQt.
+- SAM3.1 is selected automatically for `3D Multiplex`; 2D task workflows continue to use the SAM3 image model.
 
 SAM 3 is not bundled with this plugin. Install the SAM 3 backend and download the SAM 3 model files separately from Meta's Hugging Face repository.
 

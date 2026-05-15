@@ -992,11 +992,11 @@ class MaskCleanupTab(QWidget):
                 f"Cut axon from clicked point to {target_text}",
                 menu,
             )
-            cut_axon_action = menu.insertAction(
+            cut_axon_action.setToolTip("Grow the seed-similar region from the clicked point inside the clicked mask.")
+            menu.insertAction(
                 assign_local_action,
                 cut_axon_action,
             )
-            cut_axon_action.setToolTip("Grow the seed-similar region from the clicked point inside the clicked mask.")
         selected_action = menu.exec_(self._event_global_position(event))
         if cut_axon_action is not None and selected_action == cut_axon_action:
             self._apply_mouse_action(layer, event, "cut_axon")

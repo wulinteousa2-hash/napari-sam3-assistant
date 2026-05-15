@@ -2717,6 +2717,11 @@ class AdvancedModePanel(QWidget):
         else:
             layer.data = rectangles
             layer.properties = properties
+        try:
+            source = self.viewer.layers[image_layer_name]
+            self._copy_layer_geometry(source, layer)
+        except Exception:
+            pass
         self._set_layer_mode(layer, "select")
 
     def _clear_active_roi_overlay(self) -> None:
@@ -3070,6 +3075,7 @@ class AdvancedModePanel(QWidget):
         try:
             layer = self.viewer.layers[name]
             if isinstance(layer, Points):
+                self._copy_current_image_geometry(layer)
                 self._set_current_point_polarity()
                 return layer
         except (KeyError, ValueError):
@@ -3085,6 +3091,7 @@ class AdvancedModePanel(QWidget):
             symbol="disc",
             size=12,
         )
+        self._copy_current_image_geometry(layer)
         self._set_current_point_polarity()
         return layer
 
@@ -3106,6 +3113,7 @@ class AdvancedModePanel(QWidget):
             np.zeros(frame_shape, dtype=np.uint32),
             name="SAM3 preview labels",
         )
+        self._copy_layer_geometry(image_layer, labels)
         labels.visible = True
 
     def _activate_points_layer_for_live_refinement(self) -> None:
@@ -3121,6 +3129,7 @@ class AdvancedModePanel(QWidget):
         try:
             layer = self.viewer.layers[name]
             if isinstance(layer, Shapes):
+                self._copy_current_image_geometry(layer)
                 return layer
         except (KeyError, ValueError):
             pass
@@ -3131,6 +3140,7 @@ class AdvancedModePanel(QWidget):
             edge_color="#2f9e44",
             face_color="#2f9e4433",
         )
+        self._copy_current_image_geometry(layer)
         return layer
 
     def _ensure_labels_prompt_layer(self) -> Labels:
@@ -3143,13 +3153,34 @@ class AdvancedModePanel(QWidget):
         try:
             layer = self.viewer.layers[name]
             if isinstance(layer, Labels):
+                self._copy_layer_geometry(image_layer, layer)
                 return layer
         except (KeyError, ValueError):
             pass
 
         data = np.zeros(self._current_image_canvas_shape(image_layer), dtype=np.uint8)
         layer = self.viewer.add_labels(data, name=name)
+        self._copy_layer_geometry(image_layer, layer)
         return layer
+
+    def _copy_current_image_geometry(self, target_layer: Any) -> None:
+        if self.viewer is None:
+            return
+        image_name = self._current_image_layer_name()
+        if not image_name:
+            return
+        try:
+            source = self.viewer.layers[image_name]
+        except (KeyError, ValueError):
+            return
+        self._copy_layer_geometry(source, target_layer)
+
+    def _copy_layer_geometry(self, source: Any, target: Any) -> None:
+        for attr in ("scale", "translate", "rotate", "shear", "affine"):
+            try:
+                setattr(target, attr, getattr(source, attr))
+            except Exception:
+                pass
 
     def _set_current_point_polarity(self) -> None:
         layer = self._current_points_layer()

@@ -28,4 +28,6 @@ def test_axon_context_menu_inserts_qaction_not_text():
     assert "QAction(" in axon_block
     assert "menu.insertAction(" in axon_block
     assert 'f"Cut axon from clicked point to {target_text}"' in axon_block
+    assert "cut_axon_action.setToolTip" in axon_block
+    assert "cut_axon_action = menu.insertAction" not in axon_block
     assert "assign_local_action,\n                cut_axon_action," in axon_block
