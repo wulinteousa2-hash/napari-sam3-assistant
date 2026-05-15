@@ -39,6 +39,7 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     assert "Use crop image" in simple_workflow_source
     assert "Batch all image layers" in simple_workflow_source
     assert "setChecked(self.controller.large_image_enabled())" in simple_workflow_source
+    assert "self.exemplar_batch_layers_check.setEnabled(True)" in simple_workflow_source
     assert "batch_all_image_layers_enabled" in simple_workflow_source
     assert 'model_type="sam3.1"' in simple_workflow_source
     assert "QPlainTextEdit" in simple_run_source
@@ -88,6 +89,11 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     assert "Running {len(bundles)} batch job(s)" in advanced_source
     assert "SAM3 preview labels [" in advanced_source
     assert "Saved {saved} batch label layer(s)." in advanced_source
+    assert "def _preview_labels_layers" in advanced_source
+    assert "Saved {len(exported_paths)} preview masks" in advanced_source
+    assert '"SAM3 tiled exemplar labels"' in advanced_source
+    assert '"SAM3 tiled exemplar masks"' in advanced_source
+    assert '"SAM3 tiled exemplar boxes"' in advanced_source
     assert "Create Prompt Layer" in advanced_source
     assert "Clear Preview" in advanced_source
     assert "Preview output" in advanced_source

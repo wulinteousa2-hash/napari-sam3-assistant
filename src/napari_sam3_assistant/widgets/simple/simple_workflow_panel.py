@@ -306,7 +306,7 @@ class SimpleWorkflowPanel(QGroupBox):
             if label is not None:
                 label.setVisible(use_crop)
         large = self.exemplar_large_check.isChecked()
-        self.exemplar_batch_layers_check.setEnabled(large)
+        self.exemplar_batch_layers_check.setEnabled(True)
         self.roi_size_combo.setEnabled(large)
         self.tile_overlap_spin.setEnabled(large)
         self.merge_seams_check.setEnabled(large)

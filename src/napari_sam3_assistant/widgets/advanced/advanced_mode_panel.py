@@ -3403,8 +3403,14 @@ class AdvancedModePanel(QWidget):
             self._update_preview_output_filename()
 
     def _first_preview_labels_layer(self) -> Any | None:
+        layers = self._preview_labels_layers()
+        return layers[0] if layers else None
+
+    def _preview_labels_layers(self) -> list[Any]:
         if self.viewer is None:
-            return None
+            return []
+        layers: list[Any] = []
+        seen: set[int] = set()
         preferred_names = (
             "SAM3 preview labels",
             "SAM3 tiled exemplar labels",
@@ -3412,14 +3418,17 @@ class AdvancedModePanel(QWidget):
         )
         for name in preferred_names:
             try:
-                return self.viewer.layers[name]
+                layer = self.viewer.layers[name]
             except (KeyError, ValueError):
-                pass
+                continue
+            layers.append(layer)
+            seen.add(id(layer))
         for layer in self.viewer.layers:
             name = getattr(layer, "name", "")
-            if name.startswith("SAM3 preview labels ["):
-                return layer
-        return None
+            if name.startswith("SAM3 preview labels [") and id(layer) not in seen:
+                layers.append(layer)
+                seen.add(id(layer))
+        return layers
 
     def _update_preview_output_filename(self) -> None:
         if not hasattr(self, "preview_output_filename_edit"):
@@ -3458,8 +3467,8 @@ class AdvancedModePanel(QWidget):
         if self.viewer is None:
             self._log("No napari viewer was provided to the widget.")
             return
-        preview = self._first_preview_labels_layer()
-        if preview is None:
+        previews = self._preview_labels_layers()
+        if not previews:
             self._log("No preview Labels layer found to save.")
             self._sync_preview_output_controls()
             return
@@ -3482,25 +3491,34 @@ class AdvancedModePanel(QWidget):
             self._log(f"Cannot create output folder: {exc}")
             return
 
-        filename = self.preview_output_filename_edit.text().strip()
-        if not filename:
-            self._update_preview_output_filename()
+        exported_paths: list[Path] = []
+        saved_layer_names: list[str] = []
+        fmt = self.preview_output_format_combo.currentText()
+        if len(previews) == 1:
             filename = self.preview_output_filename_edit.text().strip()
-        target_path = folder / filename
-        data = preview.data.copy()
-        saved_layer_name = self._unique_layer_name(Path(filename).stem)
-        try:
-            exported = self.mask_export_service.export(
-                data,
-                target_path,
-                self.preview_output_format_combo.currentText(),
-            )
-        except Exception as exc:
-            self._log(f"Could not save preview mask: {exc}")
-            return
-        self.viewer.add_labels(data, name=saved_layer_name)
+            if not filename:
+                self._update_preview_output_filename()
+                filename = self.preview_output_filename_edit.text().strip()
+            targets = [(previews[0], folder / filename)]
+        else:
+            targets = []
+            for preview in previews:
+                base = self._quick_mask_base_name(preview)
+                stem = self._next_quick_mask_stem(base, folder, fmt)
+                targets.append((preview, folder / self._filename_for_format(stem, fmt)))
+        for preview, target_path in targets:
+            data = preview.data.copy()
+            saved_layer_name = self._unique_layer_name(Path(target_path).stem)
+            try:
+                exported = self.mask_export_service.export(data, target_path, fmt)
+            except Exception as exc:
+                self._log(f"Could not save preview mask '{getattr(preview, 'name', 'preview')}': {exc}")
+                return
+            self.viewer.add_labels(data, name=saved_layer_name)
+            exported_paths.append(exported)
+            saved_layer_names.append(saved_layer_name)
 
-        self._last_quick_mask_path = exported
+        self._last_quick_mask_path = exported_paths[-1] if exported_paths else None
         self._save_settings()
         removed = self._remove_preview_layers()
         self._release_preview_memory()
@@ -3509,11 +3527,17 @@ class AdvancedModePanel(QWidget):
         activity = "Activity: Saved. Model unloaded."
         self._set_live_refinement_status(activity)
         if hasattr(self, "live_refinement_status_label"):
-            self.live_refinement_status_label.setToolTip(f"Saved to: {exported}")
-        self._log(
-            f"Saved preview mask to layer '{saved_layer_name}' and file: {exported}. "
-            f"Completed {action}; removed {removed} preview layer(s)."
-        )
+            self.live_refinement_status_label.setToolTip(f"Saved to: {self._last_quick_mask_path}")
+        if len(exported_paths) == 1:
+            self._log(
+                f"Saved preview mask to layer '{saved_layer_names[0]}' and file: {exported_paths[0]}. "
+                f"Completed {action}; removed {removed} preview layer(s)."
+            )
+        else:
+            self._log(
+                f"Saved {len(exported_paths)} preview masks to {folder}. "
+                f"Completed {action}; removed {removed} preview layer(s)."
+            )
         self._sync_preview_output_controls()
 
     def _open_saved_mask_folder(self) -> None:
@@ -3537,6 +3561,9 @@ class AdvancedModePanel(QWidget):
                 "SAM3 preview labels",
                 "SAM3 preview masks",
                 "SAM3 preview boxes",
+                "SAM3 tiled exemplar labels",
+                "SAM3 tiled exemplar masks",
+                "SAM3 tiled exemplar boxes",
                 "SAM3 propagated preview labels",
             } or name.startswith(("SAM3 preview labels [", "SAM3 preview masks [", "SAM3 preview boxes [")):
                 self.viewer.layers.remove(layer)

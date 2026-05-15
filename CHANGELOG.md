@@ -12,6 +12,7 @@ All notable changes to `napari-sam3-assistant` are documented here.
 - Replaced the separate Simple result summary with the Run/Output/Activity panel so users see actionable progress and save controls in one place.
 - Simple `3D Multiplex` now selects the SAM3.1 model type and keeps the current viewer frame as the propagation prompt frame.
 - Added a Simple `Live Points` rapid-accept workflow: right-click while the points layer is active to accept the current preview into `SAM3 live accepted labels`, optionally clear the prompt, and continue clicking the next object without manually switching layers.
+- Made Simple Exemplar `Batch all image layers` independent from `Enable local/tiled inference`, and updated `Save && Clean` to export all batch preview mask layers.
 
 ### Fixed
 - Fixed Mask Cleanup right-click context actions so deleting or assigning an object returns the Labels layer to `pick` mode instead of accidentally continuing a previous paint or erase tool.
