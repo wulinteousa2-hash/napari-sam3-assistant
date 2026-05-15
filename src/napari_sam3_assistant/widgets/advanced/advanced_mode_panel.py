@@ -3934,6 +3934,8 @@ class AdvancedModePanel(QWidget):
         self._log(f"Active ROI bounds: y={y0}:{y1}, x={x0}:{x1}.")
 
     def _log(self, message: str) -> None:
+        if self.shared_context is not None:
+            self.shared_context.activity_log.append(message)
         self.status_box.append(message)
 
 

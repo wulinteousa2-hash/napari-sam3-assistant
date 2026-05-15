@@ -2,6 +2,20 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.3.0
+
+### Changed
+- Refactored Simple mode into task-focused workflow tabs for 2D slice prompts, exemplar segmentation, text prompts, Live Points, 3D Multiplex, and Mask Cleanup, while keeping Advanced mode intact.
+- Exposed Simple-mode controls for exemplar local/tiled inference, external crop exemplars, tile size, tile overlap, seam merging, save labels, and save-and-clean actions by reusing the existing Advanced execution paths.
+- Added a compact Simple-mode activity log so task progress and save/cleanup messages are visible without switching to Advanced.
+- Added compact Simple output controls for choosing the Save && Clean output folder and mask format, reusing the Advanced preview-mask export path.
+- Replaced the separate Simple result summary with the Run/Output/Activity panel so users see actionable progress and save controls in one place.
+- Simple `3D Multiplex` now selects the SAM3.1 model type and keeps the current viewer frame as the propagation prompt frame.
+- Added a Simple `Live Points` rapid-accept workflow: right-click while the points layer is active to accept the current preview into `SAM3 live accepted labels`, optionally clear the prompt, and continue clicking the next object without manually switching layers.
+
+### Fixed
+- Fixed Mask Cleanup right-click context actions so deleting or assigning an object returns the Labels layer to `pick` mode instead of accidentally continuing a previous paint or erase tool.
+
 ## 4.2.13
 
 ### Fixed

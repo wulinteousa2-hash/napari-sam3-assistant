@@ -17,14 +17,17 @@ The plugin focuses on task-based segmentation workflows:
 
 
 
-## What's New in 4.2.13
+## What's New in 4.3.0
 
-Version 4.2.13 fixes result-layer writing for 2D SAM3 outputs produced from 3D image slices.
+Version 4.3.0 refactors Simple mode into task-focused workflows while keeping Advanced mode intact.
 
-- Fixed a napari `ValueError` when 2D exemplar or segmentation results were written from a 3D source image with 3D layer transforms.
-- Result labels now keep the spatial Y/X transform from the source layer while dropping transform components that do not match the 2D output layer.
-- Fixed 2D exemplar ROI cropping on 3D stacks so the exemplar patch comes from the current viewer frame.
-- Added a regression test covering 2D global-image labels written from a 3D source image.
+- Simple now opens around concrete tasks: `Exemplar`, `Live Points`, `3D Multiplex`, `Cleanup`, `2D Slice`, and `Text`.
+- Exemplar exposes local ROI inference, full-image tiled scans, external crop exemplars, tile overlap, seam merging, and compact save controls.
+- Live Points adds a right-click `Accept + Clear` workflow that accumulates previews into `SAM3 live accepted labels` and immediately returns to point placement.
+- Simple now has compact `Run`, `Output`, and `Activity` controls, including output folder and mask format selection for `Save && Clean`.
+- Simple model controls moved into a collapsed `Model` section, and the global header hides Advanced-only model controls while Simple is active so the mode buttons stay readable.
+- `3D Multiplex` selects SAM3.1 automatically, while 2D task workflows keep using the SAM3 image model.
+- Mask Cleanup right-click delete/assign actions now return the Labels layer to `pick` mode instead of continuing an old paint or erase tool.
 
 
 ## What's New in 4.2.12

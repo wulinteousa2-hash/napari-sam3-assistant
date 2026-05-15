@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from qtpy.QtWidgets import (
     QComboBox,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -11,15 +10,13 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from ...core.models import Sam3Task
 from .simple_mode_controller import SimpleModeController
 
 
 class SimpleTaskPanel(QGroupBox):
     def __init__(self, controller: SimpleModeController, parent: QWidget | None = None) -> None:
-        super().__init__("Setup", parent)
+        super().__init__("Target", parent)
         self.controller = controller
-        self._task_buttons: dict[Sam3Task, QPushButton] = {}
 
         self.image_combo = QComboBox()
         self.image_combo.currentIndexChanged.connect(self._on_image_changed)
@@ -30,28 +27,11 @@ class SimpleTaskPanel(QGroupBox):
         image_row.addWidget(self.image_combo, 1)
         image_row.addWidget(refresh_btn)
 
-        task_grid = QGridLayout()
-        task_grid.setSpacing(6)
-        task_specs = (
-            ("2D", Sam3Task.SEGMENT_2D),
-            ("Text", Sam3Task.TEXT),
-            ("Live Points", Sam3Task.REFINE),
-            ("Exemplar", Sam3Task.EXEMPLAR),
-            ("3D/Video", Sam3Task.SEGMENT_3D),
-        )
-        for index, (label, task) in enumerate(task_specs):
-            button = QPushButton(label)
-            button.setCheckable(True)
-            button.clicked.connect(lambda _checked=False, task=task: self.controller.set_task(task))
-            self._task_buttons[task] = button
-            task_grid.addWidget(button, index // 3, index % 3)
-
         self.summary_label = QLabel()
         self.summary_label.setWordWrap(True)
 
         layout = QVBoxLayout()
         layout.addLayout(image_row)
-        layout.addLayout(task_grid)
         layout.addWidget(self.summary_label)
         self.setLayout(layout)
 
@@ -72,10 +52,6 @@ class SimpleTaskPanel(QGroupBox):
                     self.image_combo.setCurrentIndex(index)
         finally:
             self.image_combo.blockSignals(False)
-
-        current_task = self.controller.current_task()
-        for task, button in self._task_buttons.items():
-            button.setChecked(task == current_task)
 
         self.summary_label.setText(self.controller.image_summary())
 

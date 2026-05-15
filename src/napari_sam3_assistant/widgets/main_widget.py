@@ -102,6 +102,7 @@ class MainWidget(QWidget):
             )
         )
         self.device_combo.currentIndexChanged.connect(self._on_top_device_changed)
+        self.device_label = QLabel("Device")
         self.sound_check = QCheckBox("Sound")
         self.sound_check.setToolTip("Play a short completion chime when a SAM3 task finishes.")
 
@@ -158,7 +159,7 @@ class MainWidget(QWidget):
         layout.addWidget(self.model_status_label)
         layout.addWidget(self.model_type_combo)
         layout.addWidget(self.model_folder_btn)
-        layout.addWidget(QLabel("Device"))
+        layout.addWidget(self.device_label)
         layout.addWidget(self.device_combo)
         layout.addWidget(self.sound_check)
         strip.setLayout(layout)
@@ -205,8 +206,12 @@ class MainWidget(QWidget):
 
     def _sync_top_controls(self) -> None:
         mode = self.shared_context.get_mode()
-        self.model_status_label.setVisible(mode == "advanced")
-        self.model_type_combo.setVisible(mode == "advanced")
+        advanced = mode == "advanced"
+        self.model_status_label.setVisible(advanced)
+        self.model_type_combo.setVisible(advanced)
+        self.model_folder_btn.setVisible(advanced)
+        self.device_label.setVisible(advanced)
+        self.device_combo.setVisible(advanced)
         if mode == "advanced":
             self.model_type_combo.blockSignals(True)
             try:

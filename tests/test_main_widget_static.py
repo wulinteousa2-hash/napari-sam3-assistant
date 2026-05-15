@@ -6,6 +6,8 @@ from napari_sam3_assistant.widgets.main_widget import _is_cuda_kernel_image_erro
 MAIN_WIDGET_SOURCE = Path("src/napari_sam3_assistant/widgets/main_widget.py")
 ADVANCED_WIDGET_SOURCE = Path("src/napari_sam3_assistant/widgets/advanced/advanced_mode_panel.py")
 SIMPLE_RUN_SOURCE = Path("src/napari_sam3_assistant/widgets/simple/simple_run_panel.py")
+SIMPLE_MODEL_SOURCE = Path("src/napari_sam3_assistant/widgets/simple/simple_model_panel.py")
+SIMPLE_WORKFLOW_SOURCE = Path("src/napari_sam3_assistant/widgets/simple/simple_workflow_panel.py")
 NAPARI_MANIFEST = Path("src/napari_sam3_assistant/napari.yaml")
 
 
@@ -13,6 +15,8 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     main_source = MAIN_WIDGET_SOURCE.read_text(encoding="utf-8")
     advanced_source = ADVANCED_WIDGET_SOURCE.read_text(encoding="utf-8")
     simple_run_source = SIMPLE_RUN_SOURCE.read_text(encoding="utf-8")
+    simple_model_source = SIMPLE_MODEL_SOURCE.read_text(encoding="utf-8")
+    simple_workflow_source = SIMPLE_WORKFLOW_SOURCE.read_text(encoding="utf-8")
     manifest_source = NAPARI_MANIFEST.read_text(encoding="utf-8")
 
     assert 'QRadioButton("Simple")' in Path("src/napari_sam3_assistant/widgets/mode_switch_bar.py").read_text(encoding="utf-8")
@@ -25,6 +29,18 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     assert "Step 6. Mask Operations" not in advanced_source
     assert "SAM3 Mask Operations" in manifest_source
     assert "Mask Ops" in simple_run_source
+    assert "SimpleWorkflowPanel" in simple_workflow_source
+    assert "2D Slice" in simple_workflow_source
+    assert "3D Multiplex" in simple_workflow_source
+    assert "Scan Full Image" in simple_workflow_source
+    assert "Use crop image" in simple_workflow_source
+    assert 'model_type="sam3.1"' in simple_workflow_source
+    assert "QPlainTextEdit" in simple_run_source
+    assert "SimpleModelPanel" in simple_model_source
+    assert "Choose Model Folder" in simple_model_source
+    assert 'collapsed=True' in simple_model_source
+    assert "self.model_folder_btn.setVisible(advanced)" in main_source
+    assert "self.device_combo.setVisible(advanced)" in main_source
     assert "Log. Activity" in advanced_source
     assert "collapsibleStepBadge" in advanced_source
     assert "activityIndicator" in advanced_source

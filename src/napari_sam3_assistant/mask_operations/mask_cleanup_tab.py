@@ -832,7 +832,11 @@ class MaskCleanupTab(QWidget):
             return
 
         if self._is_right_mouse_event(event):
-            self._open_canvas_context_menu(layer, event)
+            self._neutralize_labels_mouse_tool(layer, event)
+            try:
+                self._open_canvas_context_menu(layer, event)
+            finally:
+                self._neutralize_labels_mouse_tool(layer, event)
             return
         mode = self._cleanup_subtab()
         if mode == "axon" and self.axon_cut_enable_check.isChecked():
@@ -848,6 +852,28 @@ class MaskCleanupTab(QWidget):
 
     def _mouse_enabled_for_layer(self, layer) -> bool:
         return layer is self._target_layer()
+
+    def _neutralize_labels_mouse_tool(self, layer, event=None) -> None:
+        """Leave labels context-menu actions in a non-painting mouse mode."""
+        try:
+            self.viewer.layers.selection.active = layer
+        except Exception:
+            pass
+        try:
+            layer.mode = "pick"
+        except Exception:
+            pass
+        if event is not None:
+            try:
+                event.handled = True
+            except Exception:
+                pass
+            native = getattr(event, "native", None)
+            if native is not None:
+                try:
+                    native.accept()
+                except Exception:
+                    pass
 
     def _any_canvas_tool_enabled(self) -> bool:
         delete_enabled = bool(

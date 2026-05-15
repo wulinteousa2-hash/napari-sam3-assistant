@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .activity_status_controller import ActivityStatusController
+from .activity_log_controller import ActivityLogController
 from .result_visibility_controller import ResultVisibilityController
 from .ui_state_models import ResultState, UiModeState
 
@@ -41,6 +42,7 @@ class SharedContext:
     result_visibility: ResultVisibilityController = field(default_factory=ResultVisibilityController)
     active_rois: dict[str, Any] = field(default_factory=dict)
     activity_status: ActivityStatusController = field(default_factory=ActivityStatusController)
+    activity_log: ActivityLogController = field(default_factory=ActivityLogController)
     ui_mode_state: UiModeState = field(default_factory=lambda: UiModeState("simple"))
     result_state: ResultState = field(default_factory=ResultState)
     transient: dict[str, Any] = field(default_factory=dict)
