@@ -3606,6 +3606,7 @@ class AdvancedModePanel(QWidget):
             return
         for preview_name, saved_name in (
             ("SAM3 preview labels", "SAM3 saved labels"),
+            ("SAM3 tiled exemplar labels", "SAM3 saved tiled exemplar labels"),
             ("SAM3 propagated preview labels", "SAM3 saved propagated labels"),
         ):
             try:

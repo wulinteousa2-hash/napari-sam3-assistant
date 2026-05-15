@@ -529,12 +529,15 @@ class SimpleModeController(QObject):
         viewer = self.shared_context.viewer
         if viewer is None:
             return None
-        for name in ("SAM3 preview labels", "SAM3 propagated preview labels"):
+        for name in ("SAM3 preview labels", "SAM3 tiled exemplar labels", "SAM3 propagated preview labels"):
             try:
                 return viewer.layers[name]
             except Exception:
                 pass
         return None
+
+    def has_preview_labels_layer(self) -> bool:
+        return self.first_preview_labels_layer() is not None
 
     def accept_live_preview(self, coords: tuple[int, ...] | None = None, *, clear_prompt: bool = True) -> bool:
         viewer = self.shared_context.viewer

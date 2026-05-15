@@ -36,6 +36,10 @@ class SimpleRunPanel(QGroupBox):
         self.propagate_btn.setObjectName("runButton")
         self.propagate_btn.clicked.connect(self.controller.propagate_existing_session)
 
+        self.scan_full_btn = QPushButton("Scan Full Image")
+        self.scan_full_btn.setObjectName("runButton")
+        self.scan_full_btn.clicked.connect(self._run_tiled_exemplar)
+
         self.clear_preview_btn = QPushButton("Clear Preview")
         self.clear_preview_btn.setObjectName("clearButton")
         self.clear_preview_btn.clicked.connect(self.controller.clear_preview_layers)
@@ -68,6 +72,7 @@ class SimpleRunPanel(QGroupBox):
 
         self._buttons = (
             self.run_btn,
+            self.scan_full_btn,
             self.propagate_btn,
             self.save_labels_btn,
             self.save_clean_btn,
@@ -93,9 +98,7 @@ class SimpleRunPanel(QGroupBox):
         self.controller.shared_context.activity_status.status_changed.connect(
             self.status_label.setText
         )
-        self.controller.shared_context.result_visibility.state_changed.connect(
-            lambda _state: self.refresh()
-        )
+        self.controller.shared_context.result_visibility.state_changed.connect(self._on_result_state_changed)
         self.controller.shared_context.activity_log.line_added.connect(self._append_log_line)
         self.controller.shared_context.activity_log.cleared.connect(self.activity_log.clear)
         self._reload_log()
@@ -111,13 +114,24 @@ class SimpleRunPanel(QGroupBox):
         if task == Sam3Task.SEGMENT_3D:
             self.run_btn.setText("Start 3D")
         elif task == Sam3Task.EXEMPLAR:
-            self.run_btn.setText("Run ROI")
+            self.run_btn.setText("Run Current ROI")
         else:
             self.run_btn.setText("Run")
+        self.run_btn.setToolTip(
+            "Run one preview on the current ROI or current image."
+            if task == Sam3Task.EXEMPLAR
+            else "Run the selected task and write preview layers."
+        )
+        self.scan_full_btn.setVisible(task == Sam3Task.EXEMPLAR)
+        self.scan_full_btn.setEnabled(task == Sam3Task.EXEMPLAR and self.controller.large_image_enabled())
+        self.scan_full_btn.setToolTip(
+            "Scan the full target image by tiles. Enable local/tiled inference in Exemplar first."
+        )
         self.propagate_btn.setVisible(task == Sam3Task.SEGMENT_3D)
         self.propagate_btn.setEnabled(task == Sam3Task.SEGMENT_3D and has_session)
-        self.save_labels_btn.setEnabled(state.has_any_result)
-        self.save_clean_btn.setEnabled(state.has_any_result)
+        has_preview = state.has_any_result or self.controller.has_preview_labels_layer()
+        self.save_labels_btn.setEnabled(has_preview)
+        self.save_clean_btn.setEnabled(has_preview)
         self.status_label.setText(self.controller.shared_context.activity_status.status)
         self._sync_output_controls()
         self._relayout_buttons(include_propagate=task == Sam3Task.SEGMENT_3D)
@@ -129,10 +143,23 @@ class SimpleRunPanel(QGroupBox):
         visible_buttons = [
             button
             for button in self._buttons
-            if button is not self.propagate_btn or include_propagate
+            if (
+                (button is not self.propagate_btn or include_propagate)
+                and (button is not self.scan_full_btn or button.isVisible())
+            )
         ]
         for index, button in enumerate(visible_buttons):
             self.button_grid.addWidget(button, index // 3, index % 3)
+
+    def _on_result_state_changed(self, state: object) -> None:
+        self.controller.shared_context.result_state = state
+        self.refresh()
+
+    def _run_tiled_exemplar(self) -> None:
+        workflow = getattr(self.parent(), "workflow_panel", None)
+        if workflow is not None and hasattr(workflow, "sync_to_shared_state"):
+            workflow.sync_to_shared_state()
+        self.controller.run_tiled_exemplar_scan()
 
     def _append_log_line(self, line: str) -> None:
         self.activity_log.appendPlainText(line)

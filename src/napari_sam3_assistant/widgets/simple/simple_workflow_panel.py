@@ -75,9 +75,6 @@ class SimpleWorkflowPanel(QGroupBox):
         self.tile_overlap_spin.valueChanged.connect(self.controller.set_tile_overlap)
         self.merge_seams_check = QCheckBox("Merge seam-split objects")
         self.merge_seams_check.toggled.connect(self.controller.set_merge_tile_seams_enabled)
-        self.scan_full_btn = QPushButton("Scan Full Image")
-        self.scan_full_btn.setObjectName("runButton")
-        self.scan_full_btn.clicked.connect(self._run_tiled_exemplar)
         self.tabs.addTab(self._build_exemplar_tab(), "Exemplar")
 
         self.text_prompt_edit = QLineEdit()
@@ -195,9 +192,8 @@ class SimpleWorkflowPanel(QGroupBox):
         box_btn = QPushButton("Create Box Layer")
         box_btn.clicked.connect(self.controller.create_prompt_layer)
         row.addWidget(box_btn)
-        row.addWidget(self.scan_full_btn)
         layout.addLayout(row)
-        layout.addWidget(self._hint("Draw one exemplar box, or use a crop image, then run ROI or scan the full target image."))
+        layout.addWidget(self._hint("Draw one exemplar box, or use a crop image, then run from the Run panel."))
         tab.setLayout(layout)
         return tab
 
@@ -314,7 +310,6 @@ class SimpleWorkflowPanel(QGroupBox):
         self.roi_size_combo.setEnabled(large)
         self.tile_overlap_spin.setEnabled(large)
         self.merge_seams_check.setEnabled(large)
-        self.scan_full_btn.setEnabled(large)
 
     def _run_tiled_exemplar(self) -> None:
         self.sync_to_shared_state()

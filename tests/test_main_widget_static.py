@@ -29,10 +29,13 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     assert "Step 6. Mask Operations" not in advanced_source
     assert "SAM3 Mask Operations" in manifest_source
     assert "Mask Ops" in simple_run_source
+    assert "Scan Full Image" in simple_run_source
+    assert "Run Current ROI" in simple_run_source
+    assert "_on_result_state_changed" in simple_run_source
+    assert "has_preview_labels_layer" in simple_run_source
     assert "SimpleWorkflowPanel" in simple_workflow_source
     assert "2D Slice" in simple_workflow_source
     assert "3D Multiplex" in simple_workflow_source
-    assert "Scan Full Image" in simple_workflow_source
     assert "Use crop image" in simple_workflow_source
     assert "Batch all image layers" in simple_workflow_source
     assert "setChecked(self.controller.large_image_enabled())" in simple_workflow_source

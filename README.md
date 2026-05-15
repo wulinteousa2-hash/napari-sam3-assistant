@@ -23,6 +23,8 @@ Version 4.3.0 refactors Simple mode into task-focused workflows while keeping Ad
 
 - Simple now opens around concrete tasks: `Exemplar`, `Live Points`, `3D Multiplex`, `Cleanup`, `2D Slice`, and `Text`.
 - Exemplar exposes local ROI inference, full-image tiled scans, external crop exemplars, tile overlap, seam merging, and compact save controls.
+- In Simple Exemplar, `Scan Full Image` is now in the `Run` panel next to `Run Current ROI`, and tiled scan results immediately enable `Save Labels` and `Save && Clean`.
+- Simple Exemplar can batch full-image tiled scans across all Image layers already loaded in napari.
 - Live Points adds a right-click `Accept + Clear` workflow that accumulates previews into `SAM3 live accepted labels` and immediately returns to point placement.
 - Simple now has compact `Run`, `Output`, and `Activity` controls, including output folder and mask format selection for `Save && Clean`.
 - Simple model controls moved into a collapsed `Model` section, and the global header hides Advanced-only model controls while Simple is active so the mode buttons stay readable.
