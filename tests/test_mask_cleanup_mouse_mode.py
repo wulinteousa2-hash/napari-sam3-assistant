@@ -16,3 +16,16 @@ def test_context_menu_mouse_action_neutralizes_labels_paint_mode():
     assert "layer.mode = \"pick\"" in source
     assert "event.handled = True" in source
     assert "native.accept()" in source
+
+
+def test_axon_context_menu_inserts_qaction_not_text():
+    source = MASK_CLEANUP_SOURCE.read_text(encoding="utf-8")
+    axon_block = source.split('if mode == "axon":', 1)[1].split(
+        "selected_action = menu.exec_",
+        1,
+    )[0]
+
+    assert "QAction(" in axon_block
+    assert "menu.insertAction(" in axon_block
+    assert 'f"Cut axon from clicked point to {target_text}"' in axon_block
+    assert "assign_local_action,\n                cut_axon_action," in axon_block

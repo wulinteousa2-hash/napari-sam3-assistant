@@ -7,6 +7,7 @@ import numpy as np
 from qtpy.QtGui import QCursor
 from qtpy.QtWidgets import (
     QAbstractItemView,
+    QAction,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -987,9 +988,13 @@ class MaskCleanupTab(QWidget):
                 else "background"
             )
             menu.insertSeparator(assign_local_action)
+            cut_axon_action = QAction(
+                f"Cut axon from clicked point to {target_text}",
+                menu,
+            )
             cut_axon_action = menu.insertAction(
                 assign_local_action,
-                f"Cut axon from clicked point to {target_text}",
+                cut_axon_action,
             )
             cut_axon_action.setToolTip("Grow the seed-similar region from the clicked point inside the clicked mask.")
         selected_action = menu.exec_(self._event_global_position(event))
