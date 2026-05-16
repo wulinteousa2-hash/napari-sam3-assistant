@@ -31,3 +31,18 @@ def test_axon_context_menu_inserts_qaction_not_text():
     assert "cut_axon_action.setToolTip" in axon_block
     assert "cut_axon_action = menu.insertAction" not in axon_block
     assert "assign_local_action,\n                cut_axon_action," in axon_block
+
+
+def test_components_working_region_uses_roi_scoped_writeback():
+    source = MASK_CLEANUP_SOURCE.read_text(encoding="utf-8")
+
+    assert "Working Region" in source
+    assert 'self.work_region_combo.addItem("Manual ROI", "manual")' in source
+    assert 'self.work_region_combo.addItem("Drawn ROI", "drawn")' in source
+    assert "def _work_region_slices" in source
+    assert "def _replace_layer_region_data" in source
+    assert "current.copy()" not in source.split("def _replace_scoped_layer_data", 1)[1].split(
+        "def _current_z",
+        1,
+    )[0]
+    assert 'history.append(("region", indexer, np.asarray(region).copy()))' in source

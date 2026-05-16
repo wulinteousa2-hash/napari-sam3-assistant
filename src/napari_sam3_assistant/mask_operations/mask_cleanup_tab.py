@@ -39,6 +39,7 @@ from ..widgets.collapsible_panel import CollapsiblePanel
 
 
 UNDO_HISTORY_LIMIT = 20
+UNDO_FULL_SNAPSHOT_PIXEL_LIMIT = 25_000_000
 
 
 class MaskCleanupTab(QWidget):
@@ -90,6 +91,7 @@ class MaskCleanupTab(QWidget):
         if image_index >= 0:
             self.source_image_combo.setCurrentIndex(image_index)
         current_roi = self.batch_roi_combo.currentData() if hasattr(self, "batch_roi_combo") else None
+        current_work_roi = self.work_roi_combo.currentData() if hasattr(self, "work_roi_combo") else None
         if hasattr(self, "batch_roi_combo"):
             self.batch_roi_combo.clear()
             self.batch_roi_combo.addItem("No ROI shape", "")
@@ -98,7 +100,16 @@ class MaskCleanupTab(QWidget):
             roi_index = self.batch_roi_combo.findData(current_roi)
             if roi_index >= 0:
                 self.batch_roi_combo.setCurrentIndex(roi_index)
+        if hasattr(self, "work_roi_combo"):
+            self.work_roi_combo.clear()
+            self.work_roi_combo.addItem("No ROI shape", "")
+            for name in shapes_layer_names(self.viewer):
+                self.work_roi_combo.addItem(name, name)
+            work_roi_index = self.work_roi_combo.findData(current_work_roi)
+            if work_roi_index >= 0:
+                self.work_roi_combo.setCurrentIndex(work_roi_index)
         self._sync_scope_controls()
+        self._sync_work_region_controls()
         self.refresh_unique_values()
         self._track_target_layer()
         self._sync_mouse_action_callback()
@@ -1363,6 +1374,40 @@ class MaskCleanupTab(QWidget):
         self.analysis_progress.setRange(0, 100)
         self.analysis_progress.setValue(0)
         self.analysis_progress.setFormat("Component analysis idle")
+        region_form = QFormLayout()
+        self.work_region_combo = QComboBox()
+        self.work_region_combo.addItem("Full mask", "full")
+        self.work_region_combo.addItem("Manual ROI", "manual")
+        self.work_region_combo.addItem("Drawn ROI", "drawn")
+        self.work_region_combo.setToolTip(
+            "Choose the part of the target mask analyzed by Components. "
+            "ROI modes keep analysis fast on very large masks and write edits back to the original layer."
+        )
+        self.work_region_combo.currentIndexChanged.connect(self._on_work_region_changed)
+        self.work_roi_combo = QComboBox()
+        self.work_roi_combo.setToolTip("Shapes layer used as the working region when Work on is Drawn ROI.")
+        self.work_roi_combo.currentIndexChanged.connect(lambda _index: self._on_work_region_changed())
+        self.work_y0_spin = QSpinBox()
+        self.work_y1_spin = QSpinBox()
+        self.work_x0_spin = QSpinBox()
+        self.work_x1_spin = QSpinBox()
+        for spin in (self.work_y0_spin, self.work_y1_spin, self.work_x0_spin, self.work_x1_spin):
+            spin.setRange(0, 2_147_483_647)
+            spin.valueChanged.connect(lambda _value: self._on_work_region_changed())
+        y_row = QHBoxLayout()
+        y_row.addWidget(self.work_y0_spin)
+        y_row.addWidget(QLabel("to"))
+        y_row.addWidget(self.work_y1_spin)
+        x_row = QHBoxLayout()
+        x_row.addWidget(self.work_x0_spin)
+        x_row.addWidget(QLabel("to"))
+        x_row.addWidget(self.work_x1_spin)
+        region_form.addRow("Work on", self.work_region_combo)
+        region_form.addRow("ROI shape", self.work_roi_combo)
+        region_form.addRow("Y", y_row)
+        region_form.addRow("X", x_row)
+        components_layout.addWidget(QLabel("Working Region"))
+        components_layout.addLayout(region_form)
         components_header = QHBoxLayout()
         components_header.addWidget(analyze_btn)
         components_header.addWidget(delete_btn)
@@ -1733,6 +1778,7 @@ class MaskCleanupTab(QWidget):
         self._invalidate_fast_index()
         self.component_table.set_records([])
         self._sync_scope_controls()
+        self._sync_work_region_controls()
         self.refresh_unique_values()
         self._track_target_layer()
         self._sync_mouse_action_callback()
@@ -1742,6 +1788,13 @@ class MaskCleanupTab(QWidget):
         self._invalidate_fast_index()
         self._sync_scope_controls()
         self.refresh_unique_values()
+
+    def _on_work_region_changed(self, _index: int | None = None) -> None:
+        self._invalidate_fast_index()
+        self._sync_work_region_controls()
+        self.component_table.set_records([])
+        if hasattr(self, "status_label"):
+            self.status_label.setText("Working region changed. Click Analyze Layer to rebuild the component table.")
 
     def _sync_scope_controls(self) -> None:
         layer = self._target_layer()
@@ -1766,29 +1819,118 @@ class MaskCleanupTab(QWidget):
             self.z_start_spin.setValue(z)
             self.z_end_spin.setValue(z)
 
+    def _sync_work_region_controls(self) -> None:
+        if not hasattr(self, "work_region_combo"):
+            return
+        layer = self._target_layer()
+        data = np.asarray(layer.data) if layer is not None else None
+        height = int(data.shape[-2]) if data is not None and data.ndim >= 2 else 0
+        width = int(data.shape[-1]) if data is not None and data.ndim >= 2 else 0
+        mode = self.work_region_combo.currentData()
+        manual = mode == "manual"
+        drawn = mode == "drawn"
+        for spin, maximum in (
+            (self.work_y0_spin, height),
+            (self.work_y1_spin, height),
+            (self.work_x0_spin, width),
+            (self.work_x1_spin, width),
+        ):
+            old = min(int(spin.value()), maximum)
+            spin.blockSignals(True)
+            spin.setRange(0, maximum)
+            spin.setValue(old)
+            spin.setEnabled(manual and maximum > 0)
+            spin.blockSignals(False)
+        if manual:
+            if int(self.work_y1_spin.value()) <= int(self.work_y0_spin.value()) and height > 0:
+                self.work_y1_spin.blockSignals(True)
+                self.work_y1_spin.setValue(height)
+                self.work_y1_spin.blockSignals(False)
+            if int(self.work_x1_spin.value()) <= int(self.work_x0_spin.value()) and width > 0:
+                self.work_x1_spin.blockSignals(True)
+                self.work_x1_spin.setValue(width)
+                self.work_x1_spin.blockSignals(False)
+        self.work_roi_combo.setEnabled(drawn)
+
     def _scoped_data(self, layer) -> tuple[np.ndarray, object, tuple[int, ...]]:
         arr = np.asarray(layer.data)
-        if arr.ndim < 3:
-            return arr.copy(), Ellipsis, tuple(0 for _ in range(arr.ndim))
-        scope = self.scope_combo.currentData()
-        z_axis = arr.ndim - 3
-        if scope == "whole_volume":
-            return arr.copy(), Ellipsis, tuple(0 for _ in range(arr.ndim))
-        if scope == "current_slice":
-            z = self._current_z(arr, z_axis)
-            indexer = [slice(None)] * arr.ndim
-            indexer[z_axis] = z
-            offset = [0] * arr.ndim
-            offset[z_axis] = z
-            reduced_offset = [v for axis, v in enumerate(offset) if axis != z_axis]
-            return arr[tuple(indexer)].copy(), tuple(indexer), tuple(reduced_offset)
-        z0 = min(int(self.z_start_spin.value()), int(self.z_end_spin.value()))
-        z1 = max(int(self.z_start_spin.value()), int(self.z_end_spin.value()))
-        indexer = [slice(None)] * arr.ndim
-        indexer[z_axis] = slice(z0, z1 + 1)
+        indexer: list[object] = [slice(None)] * arr.ndim
         offset = [0] * arr.ndim
-        offset[z_axis] = z0
-        return arr[tuple(indexer)].copy(), tuple(indexer), tuple(offset)
+        reduced_axes: set[int] = set()
+        if arr.ndim >= 3:
+            scope = self.scope_combo.currentData()
+            z_axis = arr.ndim - 3
+            if scope == "current_slice":
+                z = self._current_z(arr, z_axis)
+                indexer[z_axis] = z
+                offset[z_axis] = z
+                reduced_axes.add(z_axis)
+            elif scope == "z_range":
+                z0 = min(int(self.z_start_spin.value()), int(self.z_end_spin.value()))
+                z1 = max(int(self.z_start_spin.value()), int(self.z_end_spin.value()))
+                indexer[z_axis] = slice(z0, z1 + 1)
+                offset[z_axis] = z0
+        work_region = self._work_region_slices(arr)
+        if work_region is not None:
+            y_slice, x_slice = work_region
+            indexer[-2] = y_slice
+            indexer[-1] = x_slice
+            offset[-2] = 0 if y_slice.start is None else int(y_slice.start)
+            offset[-1] = 0 if x_slice.start is None else int(x_slice.start)
+        if all(selector == slice(None) for selector in indexer):
+            return arr.copy(), Ellipsis, tuple(0 for _ in range(arr.ndim))
+        scoped_indexer = tuple(indexer)
+        scoped_offset = tuple(value for axis, value in enumerate(offset) if axis not in reduced_axes)
+        return arr[scoped_indexer].copy(), scoped_indexer, scoped_offset
+
+    def _work_region_slices(self, arr: np.ndarray) -> tuple[slice, slice] | None:
+        if arr.ndim < 2 or not hasattr(self, "work_region_combo"):
+            return None
+        mode = self.work_region_combo.currentData()
+        if mode == "manual":
+            y0 = int(self.work_y0_spin.value())
+            y1 = int(self.work_y1_spin.value())
+            x0 = int(self.work_x0_spin.value())
+            x1 = int(self.work_x1_spin.value())
+        elif mode == "drawn":
+            bounds = self._drawn_work_region_bounds(arr)
+            if bounds is None:
+                return None
+            y0, x0, y1, x1 = bounds
+        else:
+            return None
+        height, width = int(arr.shape[-2]), int(arr.shape[-1])
+        y0, y1 = sorted((max(0, min(height, y0)), max(0, min(height, y1))))
+        x0, x1 = sorted((max(0, min(width, x0)), max(0, min(width, x1))))
+        if y1 <= y0 or x1 <= x0:
+            return None
+        if y0 == 0 and x0 == 0 and y1 == height and x1 == width:
+            return None
+        return slice(y0, y1), slice(x0, x1)
+
+    def _drawn_work_region_bounds(self, arr: np.ndarray) -> tuple[int, int, int, int] | None:
+        roi_layer = safe_get_layer(self.viewer, self.work_roi_combo.currentData())
+        if roi_layer is None:
+            return None
+        data = list(getattr(roi_layer, "data", []) or [])
+        if not data:
+            return None
+        mins: list[np.ndarray] = []
+        maxs: list[np.ndarray] = []
+        for vertices in data:
+            points = np.asarray(vertices)
+            if points.size == 0:
+                continue
+            coord_count = min(int(points.shape[-1]), arr.ndim)
+            coords = points[..., -coord_count:]
+            yx = coords[..., -2:]
+            mins.append(np.floor(np.min(yx, axis=0)).astype(int))
+            maxs.append(np.ceil(np.max(yx, axis=0)).astype(int) + 1)
+        if not mins:
+            return None
+        lo = np.min(np.stack(mins, axis=0), axis=0)
+        hi = np.max(np.stack(maxs, axis=0), axis=0)
+        return int(lo[0]), int(lo[1]), int(hi[0]), int(hi[1])
 
     def _source_image_for_scoped_labels(self, label_layer, indexer: object) -> np.ndarray | None:
         image_layer = safe_get_layer(self.viewer, self.source_image_combo.currentData())
@@ -1823,10 +1965,42 @@ class MaskCleanupTab(QWidget):
         current = np.asarray(layer.data)
         if indexer is Ellipsis:
             updated = np.asarray(scoped_data)
+            return self._replace_layer_data(layer, updated, action, invalidate_fast_index=invalidate_fast_index)
         else:
-            updated = current.copy()
-            updated[indexer] = scoped_data
-        return self._replace_layer_data(layer, updated, action, invalidate_fast_index=invalidate_fast_index)
+            return self._replace_layer_region_data(
+                layer,
+                scoped_data,
+                indexer,
+                action,
+                invalidate_fast_index=invalidate_fast_index,
+            )
+
+    def _replace_layer_region_data(
+        self,
+        layer,
+        scoped_data: np.ndarray,
+        indexer: object,
+        action: str,
+        *,
+        invalidate_fast_index: bool = True,
+    ) -> bool:
+        current = np.asarray(layer.data)
+        previous_region = np.asarray(current[indexer]).copy()
+        updated_region = np.asarray(scoped_data)
+        if previous_region.shape == updated_region.shape and np.array_equal(previous_region, updated_region):
+            return False
+        self._append_region_undo_state(layer, indexer, previous_region, action)
+        self._suppress_history_event = True
+        try:
+            current[indexer] = updated_region
+            layer.refresh()
+            self._last_layer_data[id(layer)] = self._snapshot_layer_data(layer)
+        finally:
+            self._suppress_history_event = False
+        self._update_undo_state()
+        if invalidate_fast_index:
+            self._invalidate_fast_index()
+        return True
 
     def _current_z(self, arr: np.ndarray, z_axis: int) -> int:
         dims = getattr(self.viewer, "dims", None)
@@ -1839,17 +2013,25 @@ class MaskCleanupTab(QWidget):
 
     def _scope_label(self, layer) -> str:
         data = np.asarray(layer.data)
+        region = self._work_region_label(data)
         if data.ndim < 3:
-            return "2D layer"
+            return f"2D layer{region}"
         scope = self.scope_combo.currentData()
         z_axis = data.ndim - 3
         if scope == "whole_volume":
-            return "whole volume"
+            return f"whole volume{region}"
         if scope == "current_slice":
-            return f"Z={self._current_z(data, z_axis)}"
+            return f"Z={self._current_z(data, z_axis)}{region}"
         z0 = min(int(self.z_start_spin.value()), int(self.z_end_spin.value()))
         z1 = max(int(self.z_start_spin.value()), int(self.z_end_spin.value()))
-        return f"Z={z0}-{z1}"
+        return f"Z={z0}-{z1}{region}"
+
+    def _work_region_label(self, data: np.ndarray) -> str:
+        region = self._work_region_slices(data)
+        if region is None:
+            return ""
+        y_slice, x_slice = region
+        return f", ROI y={y_slice.start}:{y_slice.stop}, x={x_slice.start}:{x_slice.stop}"
 
     def _selected_unique_values(self) -> list[int]:
         values: list[int] = []
@@ -1872,9 +2054,14 @@ class MaskCleanupTab(QWidget):
         previous = history.pop()
         self._suppress_history_event = True
         try:
-            layer.data = previous
+            if isinstance(previous, tuple) and len(previous) == 3 and previous[0] == "region":
+                _tag, indexer, region = previous
+                data = np.asarray(layer.data)
+                data[indexer] = region
+            else:
+                layer.data = previous
             layer.refresh()
-            self._last_layer_data[id(layer)] = np.asarray(layer.data).copy()
+            self._last_layer_data[id(layer)] = self._snapshot_layer_data(layer)
         finally:
             self._suppress_history_event = False
         self._invalidate_fast_index()
@@ -1896,7 +2083,7 @@ class MaskCleanupTab(QWidget):
         try:
             layer.data = updated
             layer.refresh()
-            self._last_layer_data[id(layer)] = np.asarray(layer.data).copy()
+            self._last_layer_data[id(layer)] = self._snapshot_layer_data(layer)
         finally:
             self._suppress_history_event = False
         self._update_undo_state()
@@ -1915,6 +2102,20 @@ class MaskCleanupTab(QWidget):
         self._log(f"Saved undo point for {layer.name}: {action}.")
         self._update_undo_state()
 
+    def _append_region_undo_state(self, layer, indexer: object, region: np.ndarray, action: str) -> None:
+        history = self._undo_history.setdefault(id(layer), [])
+        history.append(("region", indexer, np.asarray(region).copy()))
+        if len(history) > UNDO_HISTORY_LIMIT:
+            del history[0 : len(history) - UNDO_HISTORY_LIMIT]
+        self._log(f"Saved ROI undo point for {layer.name}: {action}.")
+        self._update_undo_state()
+
+    def _snapshot_layer_data(self, layer) -> np.ndarray | None:
+        data = np.asarray(layer.data)
+        if data.size > UNDO_FULL_SNAPSHOT_PIXEL_LIMIT:
+            return None
+        return data.copy()
+
     def _update_undo_state(self) -> None:
         if not hasattr(self, "undo_btn"):
             return
@@ -1932,7 +2133,7 @@ class MaskCleanupTab(QWidget):
         if layer is None:
             self._update_undo_state()
             return
-        self._last_layer_data[id(layer)] = np.asarray(layer.data).copy()
+        self._last_layer_data[id(layer)] = self._snapshot_layer_data(layer)
         events = getattr(layer, "events", None)
         data_event = getattr(events, "data", None)
         connect = getattr(data_event, "connect", None)
@@ -1965,9 +2166,11 @@ class MaskCleanupTab(QWidget):
             return
         layer_id = id(layer)
         previous = self._last_layer_data.get(layer_id)
-        current = np.asarray(layer.data).copy()
+        current = self._snapshot_layer_data(layer)
         if previous is None:
             self._last_layer_data[layer_id] = current
+            return
+        if current is None:
             return
         if previous.shape == current.shape and np.array_equal(previous, current):
             return

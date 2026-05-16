@@ -3,7 +3,7 @@
 ![napari-sam3-assistant UI](docs/ui.png)
 
 
-`napari-sam3-assistant` is a napari plugin for Segment Anything Model 3 (SAM3) image segmentation. Version 4 adds a two-mode interface: `Simple` for guided image segmentation and `Advanced` for the original full Step 1 to Step 6 workflow.
+`napari-sam3-assistant` is a napari plugin for Segment Anything Model 3 (SAM3) image segmentation. Version 4.3.2 adds large-mask cleanup regions and more reliable BigTIFF export for huge tiled exemplar masks.
 
 The plugin focuses on task-based segmentation workflows:
 
@@ -17,19 +17,16 @@ The plugin focuses on task-based segmentation workflows:
 
 
 
-## What's New in 4.3.1
+## What's New in 4.3.2
 
-Version 4.3.1 focuses on making Simple/Advanced local ROI workflows reliable for transformed OME-Zarr layers and tightening the current Simple Exemplar and Mask Cleanup workflow.
+Version 4.3.2 keeps the 4.3.1 OME-Zarr alignment fixes and adds focused improvements for huge full-image masks after tiled exemplar scans.
 
-- Prompt layers now copy the selected image layer geometry. Boxes, points, labels prompts, preview labels, and active ROI overlays stay aligned on OME-Zarr layers with physical scale metadata.
-- OME-Zarr local ROI and tiled exemplar workflows now use the same visible coordinates users draw on, avoiding empty SAM3 masks caused by scale/coordinate mismatch.
-- Simple remains task-focused with `Exemplar`, `Live Points`, `3D Multiplex`, `Cleanup`, `2D Slice`, and `Text`.
-- Simple Exemplar keeps `Scan Full Image` in the `Run` panel next to `Run Current ROI`.
-- Simple Exemplar can batch across all Image layers already loaded in napari, and `Batch all image layers` can be enabled independently from `Enable local/tiled inference`.
-- `Save Labels` and `Save && Clean` activate after tiled scan results, and `Save && Clean` exports all batch preview mask layers.
-- Live Points supports right-click `Accept + Clear` into `SAM3 live accepted labels` so users can rapidly accept one-point previews and continue.
-- Mask Cleanup right-click delete/assign returns Labels layers to `pick` mode, and the axon hole click context action no longer crashes on PyQt.
-- SAM3.1 is selected automatically for `3D Multiplex`; 2D task workflows continue to use the SAM3 image model.
+- Mask Cleanup `Components` now includes a `Working Region` section. Users can analyze the full mask, a manual Y/X ROI, or a drawn Shapes ROI.
+- Working-region cleanup builds the fast component index only for the selected ROI, then writes delete/assign/cleanup edits back into the original full-size mask at the correct coordinates.
+- ROI edits use ROI-sized undo snapshots, reducing the cost of repeated local cleanup on very large masks.
+- `Save && Clean` now exports huge tiled exemplar labels through BigTIFF using `tifffile`, preserving `uint32` label IDs.
+- PNG export now rejects label values above `65535` and directs users to TIFF or NumPy for high-value masks.
+- Prompt layers, preview labels, and active ROI overlays still copy selected image-layer geometry so TIFF and OME-Zarr local/tiled workflows stay aligned.
 
 SAM 3 is not bundled with this plugin. Install the SAM 3 backend and download the SAM 3 model files separately from Meta's Hugging Face repository.
 

@@ -2,6 +2,22 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.3.2
+
+### Added
+- Added a `Working Region` section to `Mask Cleanup / Components` so users can analyze and clean a full-size mask by `Full mask`, `Manual ROI`, or `Drawn ROI` without indexing an entire huge label image.
+- Added ROI-scoped component write-back for Mask Cleanup. Component delete, assign, and cleanup edits made inside a working ROI are written back to the original full mask at the correct coordinates.
+- Added ROI-sized undo snapshots for working-region edits so local cleanup on very large masks avoids copying the full layer for each undo point.
+- Added export tests for high-value `uint32` label masks.
+
+### Changed
+- Kept full-image tiled exemplar preview behavior intact after OME-Zarr fixes, while moving large-mask performance work into Mask Cleanup analysis/edit scope.
+- TIFF mask export now uses `tifffile` with BigTIFF enabled so very large tiled exemplar labels and `uint32` label IDs save more reliably.
+
+### Fixed
+- Fixed Save && Clean failures on huge tiled exemplar masks where PIL TIFF export could raise errors such as `'L' format requires 0 <= number <= 4294967295`.
+- Prevented PNG export from silently truncating labels above `65535`; users are directed to TIFF or NumPy for high-value label masks.
+
 ## 4.3.1
 
 ### Changed
