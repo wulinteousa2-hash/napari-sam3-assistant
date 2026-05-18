@@ -2,6 +2,12 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.3.3
+
+### Fixed
+- Fixed a critical napari transform crash when Simple or Advanced 2D exemplar workflows create 2D prompt/preview layers from transformed 3D image layers. Geometry copying is now dimension-aware, preserving spatial Y/X scale and translation while skipping incompatible 3D affine transforms on 2D layers.
+- Added regression checks so prompt-layer geometry copying keeps fitting source image transforms to the target layer dimensionality.
+
 ## 4.3.2
 
 ### Added

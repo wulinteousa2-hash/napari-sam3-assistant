@@ -3176,11 +3176,102 @@ class AdvancedModePanel(QWidget):
         self._copy_layer_geometry(source, target_layer)
 
     def _copy_layer_geometry(self, source: Any, target: Any) -> None:
+        target_ndim = self._layer_ndim(target)
+        if target_ndim is None:
+            return
         for attr in ("scale", "translate", "rotate", "shear", "affine"):
             try:
-                setattr(target, attr, getattr(source, attr))
+                value = getattr(source, attr)
+            except Exception:
+                continue
+            fitted = self._fit_geometry_value(attr, value, target_ndim)
+            if fitted is None:
+                continue
+            try:
+                setattr(target, attr, fitted)
             except Exception:
                 pass
+
+    def _layer_ndim(self, layer: Any) -> int | None:
+        try:
+            ndim = getattr(layer, "ndim")
+        except Exception:
+            ndim = None
+        if isinstance(ndim, int) and ndim > 0:
+            return ndim
+        try:
+            data = np.asarray(getattr(layer, "data"))
+        except Exception:
+            return None
+        if data.ndim == 2 and data.shape[-1] in (2, 3):
+            return int(data.shape[-1])
+        if data.ndim > 0:
+            return int(data.ndim)
+        return None
+
+    def _fit_geometry_value(self, attr: str, value: Any, ndim: int) -> Any | None:
+        if value is None:
+            return None
+        if attr in {"scale", "translate"}:
+            fill_value = 1.0 if attr == "scale" else 0.0
+            return self._fit_geometry_vector(value, ndim, fill_value)
+        if attr == "rotate":
+            return self._fit_geometry_rotate(value, ndim)
+        if attr == "shear":
+            return self._fit_geometry_shear(value, ndim)
+        if attr == "affine":
+            return value if self._geometry_transform_ndim(value) == ndim else None
+        return value
+
+    def _fit_geometry_vector(self, value: Any, ndim: int, fill_value: float) -> tuple[float, ...] | None:
+        try:
+            arr = np.asarray(value, dtype=float).reshape(-1)
+        except Exception:
+            return None
+        if arr.size == 0:
+            return None
+        if arr.size == ndim:
+            return tuple(float(v) for v in arr)
+        if arr.size > ndim:
+            return tuple(float(v) for v in arr[-ndim:])
+        padded = np.pad(arr, (ndim - arr.size, 0), constant_values=fill_value)
+        return tuple(float(v) for v in padded)
+
+    def _fit_geometry_rotate(self, value: Any, ndim: int) -> np.ndarray | None:
+        try:
+            arr = np.asarray(value, dtype=float)
+        except Exception:
+            return None
+        if arr.shape == (ndim, ndim):
+            return arr
+        if arr.ndim == 2 and arr.shape[0] == arr.shape[1] and arr.shape[0] > ndim:
+            return arr[-ndim:, -ndim:]
+        return None
+
+    def _fit_geometry_shear(self, value: Any, ndim: int) -> tuple[float, ...] | None:
+        expected = ndim * (ndim - 1) // 2
+        try:
+            arr = np.asarray(value, dtype=float).reshape(-1)
+        except Exception:
+            return None
+        if arr.size == expected:
+            return tuple(float(v) for v in arr)
+        return None
+
+    def _geometry_transform_ndim(self, value: Any) -> int | None:
+        try:
+            ndim = getattr(value, "ndim")
+        except Exception:
+            ndim = None
+        if isinstance(ndim, int):
+            return ndim
+        try:
+            matrix = np.asarray(getattr(value, "affine_matrix"))
+        except Exception:
+            return None
+        if matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1] and matrix.shape[0] > 1:
+            return int(matrix.shape[0] - 1)
+        return None
 
     def _set_current_point_polarity(self) -> None:
         layer = self._current_points_layer()

@@ -97,6 +97,8 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     assert "Create Prompt Layer" in advanced_source
     assert "def _copy_current_image_geometry" in advanced_source
     assert "def _copy_layer_geometry" in advanced_source
+    assert "def _fit_geometry_value" in advanced_source
+    assert "return value if self._geometry_transform_ndim(value) == ndim else None" in advanced_source
     assert "self._copy_current_image_geometry(layer)" in advanced_source
     assert "Clear Preview" in advanced_source
     assert "Preview output" in advanced_source

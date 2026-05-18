@@ -3,7 +3,7 @@
 ![napari-sam3-assistant UI](docs/ui.png)
 
 
-`napari-sam3-assistant` is a napari plugin for Segment Anything Model 3 (SAM3) image segmentation. Version 4.3.2 adds large-mask cleanup regions and more reliable BigTIFF export for huge tiled exemplar masks.
+`napari-sam3-assistant` is a napari plugin for Segment Anything Model 3 (SAM3) image segmentation. Version 4.3.3 adds a critical transform fix for 2D exemplar workflows on transformed 3D image layers.
 
 The plugin focuses on task-based segmentation workflows:
 
@@ -17,10 +17,12 @@ The plugin focuses on task-based segmentation workflows:
 
 
 
-## What's New in 4.3.2
+## What's New in 4.3.3
 
-Version 4.3.2 keeps the 4.3.1 OME-Zarr alignment fixes and adds focused improvements for huge full-image masks after tiled exemplar scans.
+Version 4.3.3 keeps the 4.3.2 large-mask cleanup and BigTIFF export updates, and fixes a critical napari transform crash in 2D exemplar workflows on transformed 3D image layers.
 
+- Simple and Advanced prompt-layer geometry copying is now dimension-aware. A 2D exemplar prompt or preview layer created from a 3D source image keeps compatible spatial Y/X geometry and skips incompatible 3D affine transforms.
+- This fixes a napari transform matrix mismatch that could occur immediately after clicking exemplar tools on 3D image data represented as separate channel layers.
 - Mask Cleanup `Components` now includes a `Working Region` section. Users can analyze the full mask, a manual Y/X ROI, or a drawn Shapes ROI.
 - Working-region cleanup builds the fast component index only for the selected ROI, then writes delete/assign/cleanup edits back into the original full-size mask at the correct coordinates.
 - ROI edits use ROI-sized undo snapshots, reducing the cost of repeated local cleanup on very large masks.
