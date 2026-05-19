@@ -33,7 +33,6 @@ cleaned, merged, and exported.
 - [Mask operations](docs/mask_operations.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [CPU-only SAM3.0 setup](docs/cpu_only.md)
-- [Documentation strategy](docs/documentation_strategy.md)
 
 Release notes and bug-fix history are maintained in [CHANGELOG.md](CHANGELOG.md).
 
