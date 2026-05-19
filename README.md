@@ -330,6 +330,13 @@ After a Simple preview creates labels, click `Mask Ops` in the Run area to open 
 
 Use `Clear Preview` to remove generated preview layers without deleting prompts or saved labels.
 
+`Detection threshold` in Advanced mode controls how strict SAM3 is when keeping
+candidate detections, especially for text-style grounding. Lower values can
+return more candidates but may add false positives. Higher values are stricter
+but may miss faint or uncommon structures. The Results table `Score` is backend
+confidence when available; treat it as a review aid, not a scientific quality
+measurement.
+
 ### Run and Save
 
 `Step 4. Run and Save` includes a quick save path for users who want to acquire a mask and immediately continue segmentation.

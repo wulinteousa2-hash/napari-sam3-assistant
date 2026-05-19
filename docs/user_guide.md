@@ -146,6 +146,27 @@ Important buttons:
 The top strip shared by both modes stores the selected model folder. Advanced
 mode also exposes model type, device, validation, and load/unload controls.
 
+## Detection Threshold and Scores
+
+Advanced mode includes `Detection threshold`, with a default value of `0.35`.
+This threshold is mainly useful for text grounding and other workflows where
+SAM3 may return several candidate detections.
+
+How to read it:
+
+- Lower threshold values accept weaker candidates. This can help when nothing is
+  returned, but it can also add false positives or vague masks.
+- Higher threshold values keep only stronger candidates. This can reduce false
+  positives, but it can also miss faint, small, or uncommon structures.
+- For microscopy feature search, do not rely on threshold tuning alone. If text
+  or a weak prompt gives unspecific results, switch to exemplar, box/Shapes, or
+  Live Points.
+
+The Results table `Score` column is the confidence or probability returned by
+the SAM3 backend when it is available. A higher score usually means the backend
+was more confident in that candidate, but it is not a scientific measurement of
+object quality. Always review the mask visually, especially for research data.
+
 ## 2D Segmentation With Boxes
 
 Use boxes when you want SAM3 to segment the object inside each drawn rectangle.
