@@ -299,9 +299,10 @@ Simple mode is intended for common imaging tasks:
 - `Live Points`: use positive or negative point corrections.
 - `3D Multiplex`: start SAM3.1 multiplex propagation from points or boxes on the selected frame or slice.
 - `Cleanup`: open `SAM3 Mask Operations`.
-- `2D Slice`: use points, boxes, or labels-mask prompts on the selected image plane.
+- `2D Slice`: use points or boxes on the selected image plane; labels-mask
+  prompts are available when you already have a rough prior mask.
 - `Text`: try short phrases for common visual concepts; use point, box,
-  exemplar, or labels-mask prompts for specialized microscopy structures.
+  exemplar, or Shapes prompts for specialized microscopy structures.
 
 Simple mode keeps model setup small:
 
@@ -471,8 +472,7 @@ The Results table includes a `Prompt` column. Object IDs are scoped to each imag
 
 Use text to segment matching instances of a concept when the concept is likely
 to be recognized by the SAM3 image model. Text prompting is usually less useful
-for specialized microscopy anatomy than point, box, exemplar, or labels-mask
-prompts.
+for specialized microscopy anatomy than exemplar, point, box, or Shapes prompts.
 
 Workflow:
 
@@ -496,7 +496,7 @@ Text prompts usually work better as short noun phrases than instructions. The
 plugin strips common instruction prefixes before sending the prompt to SAM3, but
 microscopy-specific language can still be difficult for the model. For axons,
 myelin, membranes, organelles, or other domain-specific structures, a box,
-point, exemplar, or labels-mask prompt is usually more dependable.
+point, exemplar, or Shapes prompt is usually more dependable.
 
 If the result says `objects=0`, SAM3 ran but did not return masks above threshold. Try a shorter noun phrase, lower `Detection threshold`, or use a box/exemplar prompt for structures that are visually clear but not well recognized by text.
 

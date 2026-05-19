@@ -34,7 +34,7 @@ Simple task tabs:
 | `3D Multiplex` | Propagate from the selected frame or slice | points or boxes |
 | `Cleanup` | Open mask cleanup, merge, and export tools | existing labels layer |
 | `2D Slice` | General 2D image segmentation on the selected image or current slice | points, box, or labels |
-| `Text` | Segment a named concept | short text phrase |
+| `Text` | Try broad/common visual concepts | short text phrase |
 
 Text prompts usually work better as short noun phrases than instructions. They
 are most useful for common visual concepts and less reliable for specialized
@@ -54,25 +54,32 @@ Only`, `Clear Prompt`, and `Undo Last Accept`.
 
 ## Prompt Types: Which One To Use
 
-Prompts are not just different input formats. They support different ways of
-working. Start with the prompt that matches what you know about the object, then
-switch prompts when the result needs more control.
+For microscopy and other research images, the most useful prompts are usually
+visual examples and local corrections, not text descriptions. Use this order as
+a practical starting point.
 
-| Prompt | Best for | How to think about it |
-| --- | --- | --- |
-| `Text` | Common visual objects with names SAM3 already recognizes | Least reliable for specialized microscopy/anatomy terms. Try it for broad/common concepts, but use box, point, exemplar, or labels-mask prompts for structures such as axons or myelin |
-| Positive `Point` | A quick local object hint | Click inside the object you want; useful when the object is obvious but you do not want to draw a box |
-| Negative `Point` | Removing nearby false positives | Click regions that should be excluded, especially after a preview is close but leaks into neighbors |
-| `Box` / Shapes region | One visible object or a tight local target | Draw around the object. SAM3 uses the bounding rectangle as the object prompt |
-| `Labels mask` | Rough painted masks or irregular prior shapes | Paint non-zero pixels in a Labels layer when a rectangle is too coarse |
-| `Exemplar` box | Find many objects similar to one example | Draw one good example object, test the local ROI, then scan or repeat |
-| Crop-image exemplar | Reuse an already isolated example | Select a crop image when the example object is already in a small separate layer |
-| 3D/video point or box | Propagation through slices or frames | Prompt one frame/slice, then let the video model propagate through the stack |
+| Rank | Prompt workflow | Best use | Notes |
+| --- | --- | --- | --- |
+| 1 | `Exemplar` with a box or Shapes region | Feature search: find objects similar to one good example | Recommended first for research features. Draw a representative object, test the local ROI, then scan or repeat |
+| 2 | `Live Points` with positive and negative points | Local correction and repeated object-by-object segmentation | Fast for fixing missed parts and removing leakage. Use `Accept + Clear`, save, then move to the next object or ROI |
+| 3 | `3D Multiplex` with a box or Shapes region | Propagating a selected object through slices or frames | Use when one prompt frame should guide segmentation across a stack/video |
+| 4 | `2D Slice` with point or box prompts | Single-object local segmentation on one plane | Useful for quick local masks, but usually less efficient than exemplar when searching for many similar features |
 
-Shapes-layer prompts are treated as bounding boxes. Rectangles are the clearest
-choice, and polygons can be useful as a way to mark a region, but the current
-SAM3 prompt sent by this plugin is still the polygon's bounding rectangle. Use a
-`Labels mask` prompt when the exact painted shape matters.
+Secondary prompt options:
+
+- `Text` is least reliable for specialized microscopy/anatomy terms. It can be
+  useful for broad common visual concepts, but for research features it is often
+  less specific than exemplar, box, or point prompts.
+- `Labels mask` prompts are available for 2D workflows, but they can be
+  cumbersome for discovery because the user must already paint a useful mask.
+  Treat them as an advanced option when you already have a rough prior mask.
+- Crop-image exemplar is useful when the example object is already isolated in a
+  small separate image layer.
+
+Shapes-layer prompts are treated as bounding boxes by the current SAM3 prompt
+path. Rectangles are the clearest choice. Polygons can be used to mark a region,
+but SAM3 receives the polygon's bounding rectangle, not the exact polygon
+contour. Use a `Labels mask` prompt only when the exact painted shape matters.
 
 ## Powerful Local Workflows
 
@@ -80,7 +87,7 @@ SAM3 prompt sent by this plugin is still the polygon's bounding rectangle. Use a
 
 For local segmentation, the fastest productive loop is often:
 
-1. Use `2D Slice`, `Text`, `Box`, or `Exemplar` to create a preview.
+1. Use `Exemplar`, `2D Slice`, or a box/Shapes prompt to create a preview.
 2. Switch to `Live Points` when the preview is close.
 3. Add positive points on missing object parts.
 4. Add negative points on leakage or neighboring objects.
@@ -154,7 +161,9 @@ region itself; exemplar segmentation uses boxed examples to find similar objects
 
 ## Text Segmentation
 
-Use text when the object can be described by a short visual concept.
+Use text when the target is a broad/common visual concept likely to be known by
+the model. For microscopy feature search, prefer exemplar, point, box, or
+Shapes-region prompts.
 
 1. Set `Task` to `Text segmentation`.
 2. Enter a short prompt.
@@ -165,8 +174,8 @@ Use text when the object can be described by a short visual concept.
 No prompt layer is needed for text-only segmentation.
 
 If the status says `objects=0`, SAM3 ran but did not return masks above the
-threshold. Try a shorter phrase, lower the threshold, or use a box/exemplar
-prompt.
+threshold. Try a shorter phrase, lower the threshold, or use exemplar, point, or
+box prompts.
 
 ![Text segmentation example](text_segmentation.png)
 
@@ -279,8 +288,8 @@ Use `Batch text prompts` when each concept should run independently.
 
 ```text
 cell
-nucleus
-myelin
+person
+cat
 ```
 
 3. Leave `Batch all image layers` off to run all prompts on the selected image.
@@ -291,8 +300,8 @@ Output layer names include both image and prompt:
 
 ```text
 SAM3 preview labels [Image 1 - cell]
-SAM3 preview labels [Image 1 - nucleus]
-SAM3 preview labels [Image 2 - cell]
+SAM3 preview labels [Image 1 - person]
+SAM3 preview labels [Image 2 - cat]
 ```
 
 ## 3D Stack / Video Propagation
