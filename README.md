@@ -1,57 +1,85 @@
-
 # napari-sam3-assistant
 ![napari-sam3-assistant UI](docs/ui.png)
 
+`napari-sam3-assistant` is a napari plugin for Segment Anything Model 3
+(SAM3) segmentation. It provides a guided `Simple` mode for common image
+segmentation work, an `Advanced` mode for detailed setup and batch runs, and a
+separate `Mask Operations` widget for cleanup, merge, and export workflows.
 
-`napari-sam3-assistant` is a napari plugin for Segment Anything Model 3 (SAM3) image segmentation. Version 4.3.3 adds a critical transform fix for 2D exemplar workflows on transformed 3D image layers.
+The plugin is intended for researchers who want SAM3 results back in napari as
+normal `Labels`, `Shapes`, and table-style outputs that can be reviewed,
+cleaned, merged, and exported.
 
-The plugin focuses on task-based segmentation workflows:
+## What It Does
 
-- 2D segmentation with text, box, point, and mask-style prompts
-- 3D stack / video-like propagation from prompts on a selected slice or frame
-- exemplar segmentation from Shapes ROI boxes
-- text-based concept segmentation
-- large OME-Zarr and TIFF segmentation through local ROI inference
-- Live Points with positive and negative prompts
-- downstream mask cleanup, merge, and export operations
+- Segment 2D images with points, boxes, text, labels-mask prompts, or exemplar
+  boxes.
+- Propagate prompts through 3D stacks or video-like data when the installed SAM3
+  backend supports the workflow.
+- Run local ROI inference on large TIFF or OME-Zarr-style images without sending
+  the full plane to SAM3 at once.
+- Scan large 2D images tile by tile from an exemplar ROI and stitch the result
+  back into a full-size labels layer.
+- Use Live Points with positive and negative corrections.
+- Save previews, clean connected components, relabel values, isolate overlapping
+  candidates, merge labels or layers, inspect overlap, and export final masks.
 
+## Documentation
 
-
-## What's New in 4.3.3
-
-Version 4.3.3 keeps the 4.3.2 large-mask cleanup and BigTIFF export updates, and fixes a critical napari transform crash in 2D exemplar workflows on transformed 3D image layers.
-
-- Simple and Advanced prompt-layer geometry copying is now dimension-aware. A 2D exemplar prompt or preview layer created from a 3D source image keeps compatible spatial Y/X geometry and skips incompatible 3D affine transforms.
-- This fixes a napari transform matrix mismatch that could occur immediately after clicking exemplar tools on 3D image data represented as separate channel layers.
-- Mask Cleanup `Components` now includes a `Working Region` section. Users can analyze the full mask, a manual Y/X ROI, or a drawn Shapes ROI.
-- Working-region cleanup builds the fast component index only for the selected ROI, then writes delete/assign/cleanup edits back into the original full-size mask at the correct coordinates.
-- ROI edits use ROI-sized undo snapshots, reducing the cost of repeated local cleanup on very large masks.
-- `Save && Clean` now exports huge tiled exemplar labels through BigTIFF using `tifffile`, preserving `uint32` label IDs.
-- PNG export now rejects label values above `65535` and directs users to TIFF or NumPy for high-value masks.
-- Prompt layers, preview labels, and active ROI overlays still copy selected image-layer geometry so TIFF and OME-Zarr local/tiled workflows stay aligned.
-
-SAM 3 is not bundled with this plugin. Install the SAM 3 backend and download the SAM 3 model files separately from Meta's Hugging Face repository.
-
-## Status
-
-This project is under active development. The current widget supports local SAM 3 model loading, napari prompt collection, Simple and Advanced UI modes, large-image ROI execution, downstream mask operations, background execution, and writing results back to napari layers.
-
-## Changelog
+- [Documentation home](docs/index.md)
+- [Installation](docs/installation.md)
+- [Model setup](docs/model_setup.md)
+- [User guide](docs/user_guide.md)
+- [Mask operations](docs/mask_operations.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [CPU-only SAM3.0 setup](docs/cpu_only.md)
+- [Documentation strategy](docs/documentation_strategy.md)
 
 Release notes and bug-fix history are maintained in [CHANGELOG.md](CHANGELOG.md).
+
+## Quick Start
+
+1. Install napari, PyTorch, the SAM3 backend, and this plugin.
+2. Download the SAM3 model files from Meta's gated Hugging Face repositories.
+3. Launch napari.
+4. Open `Plugins > SAM3 Assistant`.
+5. Choose a model folder.
+6. In `Simple` mode, select an image, choose a task tab, add a prompt, and click
+   `Run`, `Run Current ROI`, or `Start 3D`.
+7. Use `Mask Ops` or `Plugins > SAM3 Mask Operations` when the preview needs
+   cleanup, merge, or export.
+
+For complete setup instructions, see [docs/installation.md](docs/installation.md).
 
 ## Requirements
 
 - Python `>=3.11`
 - napari `>=0.5`
-- SAM 3 Python package importable as `sam3`
-- CUDA-enabled PyTorch and torchvision installed for your platform for normal use
-- A local SAM 3 checkpoint directory containing:
+- SAM3 Python package importable as `sam3`
+- CUDA-enabled PyTorch and torchvision for normal use
+- Local SAM3 model directory containing:
   - `config.json`
   - `processor_config.json`
-  - one weight file such as `sam3.pt`, `model.safetensors`, or `sam3.1_multiplex.pt`
+  - a weight file such as `sam3.pt`, `model.safetensors`, or
+    `sam3.1_multiplex.pt`
 
-CPU-only use is possible for SAM3.0 2D image workflows with a CPU-safe SAM3 backend. The tested optional backend is the external `rhubarb-ai/sam3-cpu` fork, which reports version `0.1.0` and is distributed under the MIT license in its own repository. It is not bundled with this plugin. See [CPU-only SAM3.0 setup](docs/cpu_only.md).
+CPU-only use is experimental and limited to SAM3.0 2D image workflows with a
+CPU-safe SAM3 backend. See [docs/cpu_only.md](docs/cpu_only.md).
+
+## Current Status
+
+This project is young and under active development. The core inference workflow
+is stable:
+collect prompts in napari, run SAM3 locally, write previews back to napari, and
+help users save masks. Mask Operations is useful but still evolving. The UI may
+continue to change as the workflow gets simpler, so the documentation is
+organized around user tasks rather than exact screen layout alone.
+
+## Extended Notes
+
+The sections below keep detailed setup and workflow notes for users who are
+already relying on this README. The focused documentation pages above are the
+preferred entry points for new users.
 
 ## Setup
 
@@ -261,23 +289,24 @@ Use `Simple` when you want a guided image-segmentation workflow with fewer contr
 
 The main flow is:
 
-1. Select an image and choose the task.
+1. Select an image and choose a task tab.
 2. Add the prompt.
-3. Click `Run Preview`.
+3. Click `Run`, `Run Current ROI`, or `Start 3D`, depending on the task.
 
 Simple mode is intended for common imaging tasks:
 
-- `2D`: points, boxes, labels-mask, or text prompts on the selected image plane. CPU mode requires a CPU-safe SAM3 backend.
-- `Text`: enter a short imaging concept such as `cell`, `nucleus`, or `myelin`
-- `Refine`: use Live Points to add positive or negative point corrections
-- `Exemplar`: draw one or more boxes around example objects
-- `3D/Video`: start propagation from a prompt on the selected frame or slice when the current data and model support it
+- `Exemplar`: draw one box on the target image or use a crop image; local/tiled inference is available for large images.
+- `Live Points`: use positive or negative point corrections.
+- `3D Multiplex`: start SAM3.1 multiplex propagation from points or boxes on the selected frame or slice.
+- `Cleanup`: open `SAM3 Mask Operations`.
+- `2D Slice`: use points, boxes, or labels-mask prompts on the selected image plane.
+- `Text`: enter a short imaging concept such as `cell`, `nucleus`, or `myelin`.
 
 Simple mode keeps model setup small:
 
 - model folder
 - `GPU / CUDA` or experimental `CPU`
-- SAM3.0 for Simple image tasks
+- SAM3.0 for Simple image tasks and SAM3.1 for the Simple `3D Multiplex` task
 
 Use `Advanced` when you need SAM3.1 model selection, batch processing, large-image ROI controls, detailed result tables, or CSV export.
 
@@ -606,6 +635,7 @@ Saved layers:
 ```text
 SAM3 saved labels
 SAM3 saved propagated labels
+SAM3 saved tiled exemplar labels
 ```
 
 Buttons:
@@ -617,7 +647,8 @@ Buttons:
 - `Clear Preview`: remove generated preview layers only.
 - `Cancel`: stop a running worker.
 - `Unload`: unload the SAM3 model from memory.
-- `Save Accepted Object`: save a preview label object in Mask Operations.
+- `Save & Clean`: save the current preview labels, export a mask file, clear
+  temporary preview layers, and release temporary model memory where possible.
 
 Results table:
 
@@ -660,7 +691,7 @@ Values to replace: 3,4,5,6
 New value: 3
 ```
 
-Then click `Merge Label Values`. The selected Labels layer is updated in place.
+Then click `Apply Relabel`. The selected Labels layer is updated in place.
 
 ## Mask Operations
 
@@ -668,17 +699,19 @@ Then click `Merge Label Values`. The selected Labels layer is updated in place.
 
 Tabs:
 
-- `Accepted Objects`: save a preview Labels layer as a named accepted object with class metadata, append it to an existing accepted layer, or replace an existing accepted layer.
-- `Class Merge`: merge selected accepted-object layers into a class working mask.
-- `Mask Cleanup`: analyze connected components, delete selected components, remove small objects, fill holes, smooth masks, keep the largest component, and relabel values.
+- `Mask Cleanup / Multiclass`: clean one Labels layer, remove small objects, relabel values, delete components, fill holes, smooth masks, keep the largest component, and handle multiclass cleanup.
+- `Mask Isolation`: compare many aligned SAM3 mask layers and create one clean isolated object layer.
+- `Merge Layers`: combine selected Labels layers into one class or instance mask.
 - `Final Merge / Export`: merge cleaned class masks into semantic, instance, or binary final masks, choose overlap handling, and export TIFF, PNG, or NumPy `.npy` files.
 
 The mask operations panel works on napari Labels layers, including SAM3 preview and saved label layers.
 
 Mouse-assisted cleanup:
 
-- In `Mask Cleanup`, enable `Right-click Delete`.
-- Right-click a label object in the selected target Labels layer to remove that label value.
+- In `Mask Cleanup / Multiclass`, open `Local Edit`.
+- Enable `Enable canvas right-click delete tools`.
+- Right-click a label object in the selected target Labels layer to open delete actions.
+- Enable `Enable canvas assign tools` when you want right-click assignment to the current `Assignment value`.
 - Click `Undo Last Edit` to restore the previous mask state for the selected Labels layer.
 - Double-click a component table row to jump the viewer to that mask component.
 - This is useful for supervised cleanup after SAM3 creates a preview mask.
