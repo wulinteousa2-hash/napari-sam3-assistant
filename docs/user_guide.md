@@ -50,6 +50,60 @@ Shift+T  flip the selected or latest point and rerun
 Live Points also has a right-click preview menu with `Accept + Clear`, `Accept
 Only`, `Clear Prompt`, and `Undo Last Accept`.
 
+## Prompt Types: Which One To Use
+
+Prompts are not just different input formats. They support different ways of
+working. Start with the prompt that matches what you know about the object, then
+switch prompts when the result needs more control.
+
+| Prompt | Best for | How to think about it |
+| --- | --- | --- |
+| `Text` | Objects with a recognizable visual name | Fast first pass: try `nucleus`, `cell`, `axon`, or `myelin sheath` before drawing anything |
+| Positive `Point` | A quick local object hint | Click inside the object you want; useful when the object is obvious but you do not want to draw a box |
+| Negative `Point` | Removing nearby false positives | Click regions that should be excluded, especially after a preview is close but leaks into neighbors |
+| `Box` / Shapes region | One visible object or a tight local target | Draw around the object. SAM3 uses the bounding rectangle as the object prompt |
+| `Labels mask` | Rough painted masks or irregular prior shapes | Paint non-zero pixels in a Labels layer when a rectangle is too coarse |
+| `Exemplar` box | Find many objects similar to one example | Draw one good example object, test the local ROI, then scan or repeat |
+| Crop-image exemplar | Reuse an already isolated example | Select a crop image when the example object is already in a small separate layer |
+| 3D/video point or box | Propagation through slices or frames | Prompt one frame/slice, then let the video model propagate through the stack |
+
+Shapes-layer prompts are treated as bounding boxes. Rectangles are the clearest
+choice, and polygons can be useful as a way to mark a region, but the current
+SAM3 prompt sent by this plugin is still the polygon's bounding rectangle. Use a
+`Labels mask` prompt when the exact painted shape matters.
+
+## Powerful Local Workflows
+
+### Quick Prompt, Live Point, Save, Repeat
+
+For local segmentation, the fastest productive loop is often:
+
+1. Use `2D Slice`, `Text`, `Box`, or `Exemplar` to create a preview.
+2. Switch to `Live Points` when the preview is close.
+3. Add positive points on missing object parts.
+4. Add negative points on leakage or neighboring objects.
+5. Use the Live Points right-click menu to `Accept + Clear`.
+6. Click `Save Labels` or `Save & Clean`.
+7. Move to the next object or ROI and repeat.
+
+This is useful when you want high-quality local masks without building a large
+batch workflow first. Positive and negative points are especially strong for
+small corrections because you can keep the user decision local and visible.
+
+### Exemplar, Test ROI, Then Scan
+
+Exemplar prompting is powerful when one good example should find many similar
+objects.
+
+1. Draw a tight exemplar box around a representative object.
+2. Run the current ROI first.
+3. If the ROI result is good, use tiled scanning for the full image.
+4. Use `Mask Operations` to clean, merge, or isolate final masks.
+
+A good exemplar should include the full object with a little context, but not a
+large amount of background or neighboring objects. For large images, testing the
+ROI first saves time and prevents scanning the full plane with a poor example.
+
 ## Advanced Mode
 
 Advanced mode exposes the full Step 1 to Step 6 workflow.

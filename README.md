@@ -29,7 +29,8 @@ cleaned, merged, and exported.
 - [Documentation home](docs/index.md)
 - [Installation](docs/installation.md)
 - [Model setup](docs/model_setup.md)
-- [User guide](docs/user_guide.md)
+- [User guide](docs/user_guide.md), including prompt selection and local
+  segmentation workflows
 - [Mask operations](docs/mask_operations.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [CPU-only SAM3.0 setup](docs/cpu_only.md)
