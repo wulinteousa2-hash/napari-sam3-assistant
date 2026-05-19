@@ -2,6 +2,11 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.3.4
+
+### Changed
+- Clarified the Mask Cleanup myelin/axon wording for neuroscience users: the subtab is now `Myelin / Axon`, and the click tool now describes removing axon regions from a combined myelin mask.
+
 ## 4.3.3
 
 ### Fixed
@@ -82,7 +87,7 @@ All notable changes to `napari-sam3-assistant` are documented here.
 - Added a default-on `Merge seam-split objects` option that reconnects labels cut by tile boundaries using a narrow seam-band union-find pass.
 - Added composed full-size output layers named `SAM3 tiled exemplar labels`, `SAM3 tiled exemplar masks`, and `SAM3 tiled exemplar boxes`.
 - Added README artwork demonstrating the new batch local exemplar segmentation workflow.
-- Added a dedicated `Myelin / Axon Rings` tab inside `Mask Cleanup / Multiclass`.
+- Added a dedicated `Myelin / Axon` tab inside `Mask Cleanup / Multiclass`.
 - Added one-click `Create Myelin + Axon Layers` output that creates separate `myelin_rings` and `axons` Labels layers without editing the original SAM3 labels.
 
 ### Changed
@@ -92,7 +97,7 @@ All notable changes to `napari-sam3-assistant` are documented here.
 - Improved logs and output naming for tiled exemplar scans, including tile count and labeled-pixel reporting.
 - Reorganized `Mask Cleanup / Multiclass` so `Local Edit` contains only general canvas assign/delete tools.
 - Moved myelin/axon proposal review buttons and the proposal table into collapsed `Advanced review`.
-- Scoped the axon click tool and axon right-click action to the `Myelin / Axon Rings` tab.
+- Scoped the axon click tool and axon right-click action to the `Myelin / Axon` tab.
 
 ## 4.2.9
 

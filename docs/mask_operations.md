@@ -40,7 +40,7 @@ Use Mask Operations after inference when you need to:
 | --- | --- |
 | `Components` | Analyze connected components, select rows, delete components, and assign selected components to a class value |
 | `Local Edit` | Use canvas-assisted local assignment or deletion tools |
-| `Myelin / Axon Rings` | Experimental ring-shaped myelin/axon cleanup and proposal review |
+| `Myelin / Axon` | Experimental cleanup and proposal review for masks where myelin and axon are combined |
 | `Values` | Relabel, delete, keep, or convert label values |
 
 ## Basic Cleanup Workflow
@@ -96,11 +96,11 @@ Other useful value actions:
 - `Keep Selected Only`: remove all other values.
 - `Convert Non-zero To Class`: make any non-zero value the chosen class value.
 
-## Myelin / Axon Rings
+## Myelin / Axon
 
-`Myelin / Axon Rings` is experimental and domain-specific. It is intended for
-ring-shaped masks where the ring should remain myelin and the inner hole should
-become axon.
+`Myelin / Axon` is experimental and domain-specific. It is intended for masks
+where myelin and axon are in a single mask and the axon region should be
+removed from the myelin mask or assigned to a separate axon class.
 
 Useful current actions:
 

@@ -402,7 +402,7 @@ class MaskCleanupTab(QWidget):
         axon_name = unique_layer_name(self.viewer, "axons")
         source_name = str(layer.name)
         common_metadata = {
-            "created_from": "Mask Cleanup / Myelin / Axon Rings",
+            "created_from": "Mask Cleanup / Myelin / Axon",
             "source_layer": source_name,
             "source_image_layer": str(self.source_image_combo.currentData() or ""),
             "candidate_count": len(candidates),
@@ -1333,10 +1333,11 @@ class MaskCleanupTab(QWidget):
         )
         self.mouse_action_enable_check.setChecked(False)
         self.mouse_action_enable_check.toggled.connect(lambda _checked: self._sync_mouse_action_callback())
-        self.axon_cut_enable_check = QCheckBox("Enable axon hole click tool")
+        self.axon_cut_enable_check = QCheckBox("Remove axon from myelin mask")
         self.axon_cut_enable_check.setToolTip(
-            "Myelin/axon workflow only. When on: left-click inside the axon region "
-            "to set the seed-similar inner region to background or an axon class."
+            "Myelin/axon workflow only. Use when one mask contains both the myelin "
+            "and axon. When on, left-click inside the axon region to remove it from "
+            "the combined mask or assign it to an axon class."
         )
         self.axon_cut_enable_check.setChecked(False)
         self.axon_cut_enable_check.toggled.connect(lambda _checked: self._sync_mouse_action_callback())
@@ -1366,7 +1367,7 @@ class MaskCleanupTab(QWidget):
         values_tab.setLayout(values_layout)
         self.cleanup_tabs.addTab(components_tab, "Components")
         self.cleanup_tabs.addTab(local_tab, "Local Edit")
-        self.cleanup_tabs.addTab(axon_tab, "Myelin / Axon Rings")
+        self.cleanup_tabs.addTab(axon_tab, "Myelin / Axon")
         self.cleanup_tabs.addTab(values_tab, "Values")
         root.addWidget(self.cleanup_tabs)
 
@@ -1476,8 +1477,9 @@ class MaskCleanupTab(QWidget):
         components_layout.addLayout(operations)
 
         axon_note = QLabel(
-            "One-click myelin/axon output for ring-shaped masks. This workflow creates new "
-            "myelin and axon Labels layers and does not edit the original target layer."
+            "One-click myelin/axon output for masks where myelin and axon are combined. "
+            "This workflow creates new myelin and axon Labels layers and does not edit "
+            "the original target layer."
         )
         axon_note.setWordWrap(True)
         axon_layout.addWidget(axon_note)
@@ -1751,7 +1753,10 @@ class MaskCleanupTab(QWidget):
         if mode == "local":
             return "Mouse mode: Local Edit. Click tools use local flood-fill and do not rebuild the component table."
         if mode == "axon":
-            return "Mouse mode: Myelin / Axon Rings. Axon click tools are opt-in and specific to ring-shaped masks."
+            return (
+                "Mouse mode: Myelin / Axon. Axon removal tools are opt-in and intended "
+                "for masks where myelin and axon are combined."
+            )
         if mode == "components":
             return "Mouse mode: Components. Requires a fresh Analyze Layer index for component row selection/actions."
         return "Mouse mode: Values. Clicks select or edit label values without component analysis."
