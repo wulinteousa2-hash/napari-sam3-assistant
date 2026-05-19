@@ -300,7 +300,8 @@ Simple mode is intended for common imaging tasks:
 - `3D Multiplex`: start SAM3.1 multiplex propagation from points or boxes on the selected frame or slice.
 - `Cleanup`: open `SAM3 Mask Operations`.
 - `2D Slice`: use points, boxes, or labels-mask prompts on the selected image plane.
-- `Text`: enter a short imaging concept such as `cell`, `nucleus`, or `myelin`.
+- `Text`: try short phrases for common visual concepts; use point, box,
+  exemplar, or labels-mask prompts for specialized microscopy structures.
 
 Simple mode keeps model setup small:
 
@@ -468,7 +469,10 @@ The Results table includes a `Prompt` column. Object IDs are scoped to each imag
 
 ### Text Segmentation
 
-Use text to segment all matching instances of a concept.
+Use text to segment matching instances of a concept when the concept is likely
+to be recognized by the SAM3 image model. Text prompting is usually less useful
+for specialized microscopy anatomy than point, box, exemplar, or labels-mask
+prompts.
 
 Workflow:
 
@@ -478,9 +482,9 @@ Workflow:
 
 ```text
 cell
-nucleus
-myelin
-myelin sheath
+person
+cat
+vehicle
 ```
 
 4. Keep `Detection threshold` near the default `0.35`, or lower it if the result is empty.
@@ -488,7 +492,11 @@ myelin sheath
 
 No prompt layer is needed for text segmentation. `Create Prompt Layer` is not required.
 
-Text prompts usually work better as short noun phrases than instructions. Prefer `myelin sheath` over `segment all the myelin rings`. The plugin strips common instruction prefixes before sending the prompt to SAM3, but microscopy-specific language can still be difficult for the model.
+Text prompts usually work better as short noun phrases than instructions. The
+plugin strips common instruction prefixes before sending the prompt to SAM3, but
+microscopy-specific language can still be difficult for the model. For axons,
+myelin, membranes, organelles, or other domain-specific structures, a box,
+point, exemplar, or labels-mask prompt is usually more dependable.
 
 If the result says `objects=0`, SAM3 ran but did not return masks above threshold. Try a shorter noun phrase, lower `Detection threshold`, or use a box/exemplar prompt for structures that are visually clear but not well recognized by text.
 

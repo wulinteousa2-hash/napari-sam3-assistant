@@ -36,9 +36,11 @@ Simple task tabs:
 | `2D Slice` | General 2D image segmentation on the selected image or current slice | points, box, or labels |
 | `Text` | Segment a named concept | short text phrase |
 
-Text prompts usually work better as short noun phrases than instructions. Use
-`nucleus`, `cell`, or `myelin sheath` rather than `segment every nucleus in this
-image`.
+Text prompts usually work better as short noun phrases than instructions. They
+are most useful for common visual concepts and less reliable for specialized
+scientific anatomy or microscopy features. If `axon`, `myelin`, or another
+domain term returns poor results, use a box, point, exemplar, or labels-mask
+prompt instead.
 
 Live Points shortcuts:
 
@@ -58,7 +60,7 @@ switch prompts when the result needs more control.
 
 | Prompt | Best for | How to think about it |
 | --- | --- | --- |
-| `Text` | Objects with a recognizable visual name | Fast first pass: try `nucleus`, `cell`, `axon`, or `myelin sheath` before drawing anything |
+| `Text` | Common visual objects with names SAM3 already recognizes | Least reliable for specialized microscopy/anatomy terms. Try it for broad/common concepts, but use box, point, exemplar, or labels-mask prompts for structures such as axons or myelin |
 | Positive `Point` | A quick local object hint | Click inside the object you want; useful when the object is obvious but you do not want to draw a box |
 | Negative `Point` | Removing nearby false positives | Click regions that should be excluded, especially after a preview is close but leaks into neighbors |
 | `Box` / Shapes region | One visible object or a tight local target | Draw around the object. SAM3 uses the bounding rectangle as the object prompt |
