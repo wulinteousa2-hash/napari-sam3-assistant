@@ -68,3 +68,52 @@ def test_tile_seam_merge_reconnects_horizontal_split_object():
 
     assert merge_count == 1
     assert merged[3, 3] == merged[6, 3]
+
+
+def test_result_boxes_for_tile_clips_to_real_tile_area():
+    panel = AdvancedModePanel.__new__(AdvancedModePanel)
+    from napari_sam3_assistant.core.models import Sam3Result, Sam3Task
+
+    result = Sam3Result(
+        task=Sam3Task.EXEMPLAR,
+        boxes_xyxy=np.asarray(
+            [
+                [2, 2, 10, 10],      # exemplar-side box, outside tile
+                [18, 3, 28, 13],     # tile-side box
+                [12, 1, 20, 6],      # crosses into tile, clipped
+            ],
+            dtype=np.float32,
+        ),
+        scores=np.asarray([0.1, 0.9, 0.5], dtype=np.float32),
+    )
+
+    boxes, scores = panel._result_boxes_for_tile(result, tile_origin=(0, 16), tile_hw=(20, 20))
+
+    np.testing.assert_allclose(
+        boxes,
+        np.asarray(
+            [
+                [2, 3, 12, 13],
+                [0, 1, 4, 6],
+            ],
+            dtype=np.float32,
+        ),
+    )
+    np.testing.assert_allclose(scores, np.asarray([0.9, 0.5], dtype=np.float32))
+
+
+def test_dedupe_tiled_boxes_removes_high_iou_duplicates():
+    panel = AdvancedModePanel.__new__(AdvancedModePanel)
+    boxes = np.asarray(
+        [
+            [10, 10, 30, 30],
+            [11, 11, 31, 31],
+            [80, 80, 100, 100],
+        ],
+        dtype=np.float32,
+    )
+
+    deduped = panel._dedupe_tiled_boxes(boxes, iou_threshold=0.8)
+
+    assert deduped.shape == (2, 4)
+    assert any(np.allclose(row, [80, 80, 100, 100]) for row in deduped)

@@ -17,6 +17,7 @@ from ..advanced.advanced_mode_panel import (
     PROMPT_POINTS,
     PROMPT_TEXT,
 )
+from ..live_points_accept import LivePointsAcceptService
 from ..shared.shared_context import SharedContext
 
 SIMPLE_MODEL_DIR_KEY = "simple_model_dir"
@@ -29,7 +30,15 @@ class SimpleModeController(QObject):
     def __init__(self, shared_context: SharedContext, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.shared_context = shared_context
-        self._live_accept_undo: list[np.ndarray] = []
+        self._live_points_accept = LivePointsAcceptService(
+            viewer_getter=lambda: self.shared_context.viewer,
+            points_layer_getter=self.current_points_layer,
+            preview_layer_getter=self._owner_first_preview_labels_layer,
+            clear_preview_callback=self._owner_clear_preview_layers,
+            clear_prompt_callback=self._clear_live_points_prompt_impl,
+            activate_layer_callback=self._activate_live_points_layer,
+            log_callback=self._owner_log,
+        )
 
     @property
     def owner(self) -> Any:
@@ -219,6 +228,9 @@ class SimpleModeController(QObject):
         self.refresh()
 
     def clear_live_points_prompt(self) -> None:
+        self._live_points_accept.clear_live_points_prompt()
+
+    def _clear_live_points_prompt_impl(self) -> None:
         layer = self.current_points_layer()
         if layer is not None:
             try:
@@ -238,9 +250,7 @@ class SimpleModeController(QObject):
             except Exception:
                 pass
         self._activate_live_points_layer()
-        owner = self.owner
-        if owner is not None and hasattr(owner, "_log"):
-            owner._log("Live Points prompt cleared.")
+        self._owner_log("Live Points prompt cleared.")
 
     def browse_model_dir(self) -> None:
         owner = self.owner
@@ -523,6 +533,9 @@ class SimpleModeController(QObject):
         return None
 
     def first_preview_labels_layer(self) -> Any | None:
+        return self._live_points_accept.first_preview_labels_layer()
+
+    def _owner_first_preview_labels_layer(self) -> Any | None:
         owner = self.owner
         if owner is not None and hasattr(owner, "_first_preview_labels_layer"):
             return owner._first_preview_labels_layer()
@@ -537,96 +550,23 @@ class SimpleModeController(QObject):
         return None
 
     def has_preview_labels_layer(self) -> bool:
-        return self.first_preview_labels_layer() is not None
+        return self._live_points_accept.has_preview_labels_layer()
 
     def accept_live_preview(self, coords: tuple[int, ...] | None = None, *, clear_prompt: bool = True) -> bool:
-        viewer = self.shared_context.viewer
-        preview = self.first_preview_labels_layer()
-        owner = self.owner
-        if viewer is None or preview is None:
-            if owner is not None and hasattr(owner, "_log"):
-                owner._log("No Live Points preview labels found to accept.")
-            return False
-
-        preview_data = np.asarray(preview.data)
-        if not np.any(preview_data):
-            if owner is not None and hasattr(owner, "_log"):
-                owner._log("Live Points preview is empty; nothing accepted.")
-            return False
-
-        mask = preview_data > 0
-        if coords is not None and len(coords) == preview_data.ndim:
-            in_bounds = all(0 <= coord < size for coord, size in zip(coords, preview_data.shape, strict=False))
-            if in_bounds:
-                value = int(preview_data[coords])
-                if value > 0:
-                    mask = preview_data == value
-
-        accepted = self._live_accepted_layer(preview_data.shape)
-        accepted_data = np.asarray(accepted.data)
-        self._live_accept_undo.append(accepted_data.copy())
-        if len(self._live_accept_undo) > 20:
-            self._live_accept_undo.pop(0)
-
-        object_id = int(accepted_data.max()) + 1 if accepted_data.size else 1
-        write_mask = mask & (accepted_data == 0)
-        changed = int(np.count_nonzero(write_mask))
-        if changed == 0:
-            write_mask = mask
-            changed = int(np.count_nonzero(write_mask))
-        accepted_data = accepted_data.copy()
-        accepted_data[write_mask] = object_id
-        accepted.data = accepted_data
-        try:
-            accepted.refresh()
-        except Exception:
-            pass
-
-        if owner is not None and hasattr(owner, "_clear_preview_layers"):
-            owner._clear_preview_layers()
-        if clear_prompt:
-            self.clear_live_points_prompt()
-        else:
-            self._activate_live_points_layer()
-        if owner is not None and hasattr(owner, "_log"):
-            suffix = " Prompt cleared." if clear_prompt else ""
-            owner._log(f"Accepted Live Points preview as object {object_id} ({changed} pixel(s)).{suffix}")
-        return True
+        return self._live_points_accept.accept_live_preview(coords, clear_prompt=clear_prompt)
 
     def undo_live_accept(self) -> bool:
-        viewer = self.shared_context.viewer
-        if viewer is None or not self._live_accept_undo:
-            owner = self.owner
-            if owner is not None and hasattr(owner, "_log"):
-                owner._log("No accepted Live Points object to undo.")
-            return False
-        try:
-            layer = viewer.layers["SAM3 live accepted labels"]
-        except Exception:
-            return False
-        layer.data = self._live_accept_undo.pop()
-        try:
-            layer.refresh()
-        except Exception:
-            pass
-        self._activate_live_points_layer()
+        return self._live_points_accept.undo_live_accept()
+
+    def _owner_clear_preview_layers(self) -> None:
+        owner = self.owner
+        if owner is not None and hasattr(owner, "_clear_preview_layers"):
+            owner._clear_preview_layers()
+
+    def _owner_log(self, message: str) -> None:
         owner = self.owner
         if owner is not None and hasattr(owner, "_log"):
-            owner._log("Undid last accepted Live Points object.")
-        return True
-
-    def _live_accepted_layer(self, shape: tuple[int, ...]):
-        viewer = self.shared_context.viewer
-        assert viewer is not None
-        name = "SAM3 live accepted labels"
-        try:
-            layer = viewer.layers[name]
-            if tuple(np.asarray(layer.data).shape) == tuple(shape):
-                return layer
-        except Exception:
-            pass
-        data = np.zeros(shape, dtype=np.uint32)
-        return viewer.add_labels(data, name=name)
+            owner._log(message)
 
     def _activate_live_points_layer(self) -> None:
         layer = self.current_points_layer()

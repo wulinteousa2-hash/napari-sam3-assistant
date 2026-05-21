@@ -2,6 +2,20 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.3.5
+
+### Added
+- Added the Live Points right-click accept workflow to Advanced mode. When Advanced Live Points is active, users can right-click the points layer to `Accept + Clear`, `Accept Only`, clear prompts, or undo the last accepted Live Points object.
+- Added shared Live Points accept/menu handling so Simple and Advanced modes use the same preview-accept behavior.
+
+### Changed
+- Updated large-image ROI reuse so changing ROI size, such as `4096 x 4096` to `8192 x 8192` or `512 x 512`, recomputes the next `Run Current ROI Only` region instead of reusing an old active ROI with the wrong size.
+- Documented that `Scan Full Image by Tiles` currently uses one exemplar crop as a visual reference for every tile, while `Run Current ROI Only` runs on the real selected ROI and can use boxes overlapping that ROI.
+
+### Fixed
+- Fixed tiled exemplar scans dropping result boxes during full-image composition. Tiled scans now clip tile-side boxes, translate them back into global image coordinates, deduplicate high-overlap boxes, and write `SAM3 tiled exemplar boxes`.
+- Kept Simple Live Points mouse callbacks disconnected when switching to Advanced mode and guarded native event acceptance so non-mouse Qt events are not treated as mouse actions.
+
 ## 4.3.4
 
 ### Changed

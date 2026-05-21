@@ -182,6 +182,8 @@ class MainWidget(QWidget):
         if hasattr(self, "mode_switch_bar") and self.mode_switch_bar.current_mode() != mode:
             self.mode_switch_bar.set_mode(mode)
         self.shared_context.set_mode(mode)
+        if hasattr(self, "simple_panel"):
+            self.simple_panel.refresh_from_shared_state()
         self._save_mode(mode)
         if mode == "advanced":
             self.advanced_panel._restore_settings()

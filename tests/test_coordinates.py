@@ -300,3 +300,50 @@ def test_localize_bundle_to_roi_crops_labels_mask_to_local_roi():
     assert len(local.masks) == 1
     assert local.masks[0].mask.shape == (32, 32)
     assert local.masks[0].mask[4:15, 8:29].all()
+
+
+def test_active_roi_recomputes_when_requested_size_changes():
+    from napari_sam3_assistant.widgets.advanced.advanced_mode_panel import AdvancedModePanel
+
+    selection = infer_image_selection("large", (16000, 16000))
+    bundle = PromptBundle(
+        task=Sam3Task.EXEMPLAR,
+        image=selection,
+        boxes=[BoxPrompt(y0=7900, x0=7900, y1=8100, x1=8100)],
+    )
+    panel = AdvancedModePanel.__new__(AdvancedModePanel)
+    panel._active_rois = {"large": RoiBounds(y0=6144, x0=6144, y1=10240, x1=10240)}
+
+    bounds = panel._active_or_new_roi_bounds(
+        bundle,
+        anchor=(8000, 8000),
+        image_hw=(16000, 16000),
+        roi_size=(8192, 8192),
+    )
+
+    assert bounds.height == 8192
+    assert bounds.width == 8192
+    assert bounds != panel._active_rois["large"]
+
+
+def test_active_roi_reuses_matching_size_when_anchor_remains_inside():
+    from napari_sam3_assistant.widgets.advanced.advanced_mode_panel import AdvancedModePanel
+
+    selection = infer_image_selection("large", (16000, 16000))
+    bundle = PromptBundle(
+        task=Sam3Task.EXEMPLAR,
+        image=selection,
+        boxes=[BoxPrompt(y0=7900, x0=7900, y1=8100, x1=8100)],
+    )
+    current = RoiBounds(y0=6144, x0=6144, y1=10240, x1=10240)
+    panel = AdvancedModePanel.__new__(AdvancedModePanel)
+    panel._active_rois = {"large": current}
+
+    bounds = panel._active_or_new_roi_bounds(
+        bundle,
+        anchor=(8000, 8000),
+        image_hw=(16000, 16000),
+        roi_size=(4096, 4096),
+    )
+
+    assert bounds is current

@@ -78,6 +78,7 @@ from ...mask_operations.export_service import MaskExportService
 from ...notifications import TaskCompleteSound
 from ..collapsible_panel import CollapsiblePanel
 from ..live_point_refinement import LivePointRefinementController
+from ..live_points_accept import LivePointsAcceptService, LivePointsContextMenu
 from ..shared.activity_status_controller import ActivityStatusController
 from ..shared.shared_context import SharedContext
 
@@ -436,6 +437,20 @@ class AdvancedModePanel(QWidget):
             is_enabled_callback=self._live_refinement_enabled,
             shortcuts_enabled_callback=self._live_refinement_shortcuts_enabled,
         )
+        self.live_points_accept = LivePointsAcceptService(
+            viewer_getter=lambda: self.viewer,
+            points_layer_getter=self._current_points_layer,
+            preview_layer_getter=self._first_preview_labels_layer,
+            clear_preview_callback=self._clear_preview_layers,
+            clear_prompt_callback=self._clear_live_points_prompt,
+            activate_layer_callback=self._activate_points_layer_for_live_refinement,
+            log_callback=self._log,
+        )
+        self.live_points_context_menu = LivePointsContextMenu(
+            self,
+            self.live_points_accept,
+            self._live_points_context_menu_enabled,
+        )
         self._sync_live_refinement_layer()
         self._set_live_refinement_status("Activity: idle")
 
@@ -574,6 +589,9 @@ class AdvancedModePanel(QWidget):
             return False
         return self._live_refinement_enabled()
 
+    def _live_points_context_menu_enabled(self) -> bool:
+        return self._live_refinement_shortcuts_enabled()
+
     def _toggle_next_point_mode(self) -> None:
         current = self.point_polarity_combo.currentData() or "positive"
         new_value = "negative" if current == "positive" else "positive"
@@ -609,11 +627,15 @@ class AdvancedModePanel(QWidget):
     def _sync_live_refinement_layer(self) -> None:
         if self.viewer is None:
             self.live_point_refinement.set_points_layer(None)
+            if hasattr(self, "live_points_context_menu"):
+                self.live_points_context_menu.disconnect_mouse_callback()
             return
 
         layer_name = self._optional_combo_data(self.points_layer_combo)
         if not layer_name:
             self.live_point_refinement.set_points_layer(None)
+            if hasattr(self, "live_points_context_menu"):
+                self.live_points_context_menu.disconnect_mouse_callback()
             return
 
         try:
@@ -622,6 +644,9 @@ class AdvancedModePanel(QWidget):
             layer = None
 
         self.live_point_refinement.set_points_layer(layer)
+        if hasattr(self, "live_points_context_menu"):
+            active_layer = layer if self._live_points_context_menu_enabled() else None
+            self.live_points_context_menu.sync_mouse_callback(active_layer)
 
     def _run_live_refinement_preview(self) -> None:
         if not self._live_refinement_enabled():
@@ -1793,6 +1818,8 @@ class AdvancedModePanel(QWidget):
                 tiles = job["tiles"]
                 self._ensure_image_adapter_loaded_for_bundle(adapter, bundle)
                 composed = np.zeros(image_hw, dtype=np.uint32)
+                composed_boxes: list[np.ndarray] = []
+                composed_scores: list[np.ndarray] = []
                 next_object_id = 1
                 total_tiles = len(tiles)
                 for tile_index, bounds in enumerate(tiles, start=1):
@@ -1819,6 +1846,18 @@ class AdvancedModePanel(QWidget):
                         tile_origin,
                         (bounds.height, bounds.width),
                     )
+                    local_boxes, local_scores = self._result_boxes_for_tile(
+                        result,
+                        tile_origin,
+                        (bounds.height, bounds.width),
+                    )
+                    if local_boxes.size:
+                        global_boxes = local_boxes.copy()
+                        global_boxes[:, [0, 2]] += float(bounds.x0)
+                        global_boxes[:, [1, 3]] += float(bounds.y0)
+                        composed_boxes.append(global_boxes)
+                        if local_scores is not None and local_scores.size:
+                            composed_scores.append(local_scores)
                     next_object_id = self._compose_tile_labels(
                         composed,
                         local_labels,
@@ -1833,9 +1872,21 @@ class AdvancedModePanel(QWidget):
                         dilation_px=2,
                         min_contact_pixels=8,
                     )
+                boxes_xyxy = self._dedupe_tiled_boxes(
+                    np.concatenate(composed_boxes, axis=0)
+                    if composed_boxes
+                    else np.zeros((0, 4), dtype=np.float32)
+                )
+                scores = (
+                    np.concatenate(composed_scores, axis=0).astype(np.float32, copy=False)
+                    if composed_scores
+                    else None
+                )
                 yield Sam3Result(
                     task=Sam3Task.EXEMPLAR,
                     labels=composed,
+                    boxes_xyxy=boxes_xyxy if len(boxes_xyxy) else None,
+                    scores=scores if scores is not None and len(scores) == len(boxes_xyxy) else None,
                     metadata={
                         "image_layer": bundle.image.layer_name,
                         "large_image_mode": True,
@@ -2049,6 +2100,73 @@ class AdvancedModePanel(QWidget):
         y0, x0 = tile_origin
         tile_h, tile_w = tile_hw
         return np.asarray(label_image[y0 : y0 + tile_h, x0 : x0 + tile_w], dtype=np.uint32)
+
+    def _result_boxes_for_tile(
+        self,
+        result: Sam3Result,
+        tile_origin: tuple[int, int],
+        tile_hw: tuple[int, int],
+    ) -> tuple[np.ndarray, np.ndarray | None]:
+        boxes = np.asarray(result.boxes_xyxy) if result.boxes_xyxy is not None else np.zeros((0, 4), dtype=np.float32)
+        if boxes.size == 0:
+            return np.zeros((0, 4), dtype=np.float32), None
+        boxes = boxes.reshape(-1, 4).astype(np.float32, copy=False)
+        tile_y0, tile_x0 = tile_origin
+        tile_h, tile_w = tile_hw
+        tile_x1 = float(tile_x0 + tile_w)
+        tile_y1 = float(tile_y0 + tile_h)
+
+        x0 = np.maximum(boxes[:, 0], float(tile_x0))
+        y0 = np.maximum(boxes[:, 1], float(tile_y0))
+        x1 = np.minimum(boxes[:, 2], tile_x1)
+        y1 = np.minimum(boxes[:, 3], tile_y1)
+        keep = (x1 > x0) & (y1 > y0)
+        if not np.any(keep):
+            return np.zeros((0, 4), dtype=np.float32), None
+
+        clipped = np.stack(
+            [
+                x0[keep] - float(tile_x0),
+                y0[keep] - float(tile_y0),
+                x1[keep] - float(tile_x0),
+                y1[keep] - float(tile_y0),
+            ],
+            axis=1,
+        ).astype(np.float32, copy=False)
+        scores = None
+        if result.scores is not None:
+            score_array = np.asarray(result.scores, dtype=np.float32).reshape(-1)
+            if len(score_array) == len(boxes):
+                scores = score_array[keep]
+        return clipped, scores
+
+    def _dedupe_tiled_boxes(self, boxes: np.ndarray, iou_threshold: float = 0.85) -> np.ndarray:
+        boxes = np.asarray(boxes, dtype=np.float32).reshape(-1, 4)
+        if len(boxes) <= 1:
+            return boxes
+        areas = np.maximum(0.0, boxes[:, 2] - boxes[:, 0]) * np.maximum(0.0, boxes[:, 3] - boxes[:, 1])
+        order = np.argsort(areas)[::-1]
+        keep: list[int] = []
+        for idx in order:
+            if areas[idx] <= 0:
+                continue
+            candidate = boxes[idx]
+            duplicate = False
+            for kept_idx in keep:
+                kept = boxes[kept_idx]
+                xx0 = max(float(candidate[0]), float(kept[0]))
+                yy0 = max(float(candidate[1]), float(kept[1]))
+                xx1 = min(float(candidate[2]), float(kept[2]))
+                yy1 = min(float(candidate[3]), float(kept[3]))
+                inter = max(0.0, xx1 - xx0) * max(0.0, yy1 - yy0)
+                union = float(areas[idx] + areas[kept_idx] - inter)
+                if union > 0 and inter / union >= iou_threshold:
+                    duplicate = True
+                    break
+            if not duplicate:
+                keep.append(int(idx))
+        keep.sort()
+        return boxes[keep]
 
     def _compose_tile_labels(
         self,
@@ -2677,13 +2795,21 @@ class AdvancedModePanel(QWidget):
         image_hw: tuple[int, int],
         roi_size: tuple[int, int],
     ) -> RoiBounds:
-        current = self._active_rois.get(bundle.image.layer_name)
         anchor_y, anchor_x = anchor
-        if current is not None and current.contains_yx(anchor_y, anchor_x):
-            return current
         if bundle.boxes and not bundle.points:
-            return box_roi_bounds(bundle.boxes[-1], image_hw=image_hw, roi_hw=roi_size)
-        return centered_roi_bounds(anchor_y, anchor_x, image_hw=image_hw, roi_hw=roi_size)
+            proposed = box_roi_bounds(bundle.boxes[-1], image_hw=image_hw, roi_hw=roi_size)
+        else:
+            proposed = centered_roi_bounds(anchor_y, anchor_x, image_hw=image_hw, roi_hw=roi_size)
+
+        current = self._active_rois.get(bundle.image.layer_name)
+        if (
+            current is not None
+            and current.contains_yx(anchor_y, anchor_x)
+            and current.height == proposed.height
+            and current.width == proposed.width
+        ):
+            return current
+        return proposed
 
     def _show_active_roi_overlay(
         self,
@@ -3122,6 +3248,25 @@ class AdvancedModePanel(QWidget):
             return
         self.viewer.layers.selection.active = layer
         self._set_layer_mode(layer, "add")
+
+    def _clear_live_points_prompt(self) -> None:
+        layer = self._current_points_layer()
+        if layer is not None:
+            try:
+                with self.live_point_refinement.suspend_events():
+                    layer.data = np.empty((0, layer.ndim), dtype=float)
+            except Exception:
+                pass
+            try:
+                layer.selected_data = set()
+            except Exception:
+                pass
+            try:
+                layer.refresh()
+            except Exception:
+                pass
+        self._activate_points_layer_for_live_refinement()
+        self._log("Live Points prompt cleared.")
 
     def _ensure_shapes_prompt_layer(self) -> Shapes:
         assert self.viewer is not None

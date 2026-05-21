@@ -8,6 +8,7 @@ ADVANCED_WIDGET_SOURCE = Path("src/napari_sam3_assistant/widgets/advanced/advanc
 SIMPLE_RUN_SOURCE = Path("src/napari_sam3_assistant/widgets/simple/simple_run_panel.py")
 SIMPLE_MODEL_SOURCE = Path("src/napari_sam3_assistant/widgets/simple/simple_model_panel.py")
 SIMPLE_WORKFLOW_SOURCE = Path("src/napari_sam3_assistant/widgets/simple/simple_workflow_panel.py")
+LIVE_POINTS_ACCEPT_SOURCE = Path("src/napari_sam3_assistant/widgets/live_points_accept.py")
 NAPARI_MANIFEST = Path("src/napari_sam3_assistant/napari.yaml")
 
 
@@ -129,6 +130,39 @@ def test_widget_does_not_expose_dummy_mask_debug_action():
 
     assert "Add Dummy Mask Layer" not in source
     assert "_add_dummy_mask" not in source
+
+
+def test_mode_switch_disconnects_simple_live_points_mouse_callback():
+    main_source = MAIN_WIDGET_SOURCE.read_text(encoding="utf-8")
+    simple_source = Path("src/napari_sam3_assistant/widgets/simple/simple_mode_panel.py").read_text(encoding="utf-8")
+
+    mode_switch_block = main_source.split("def _set_mode", 1)[1].split(
+        "def _sync_top_controls",
+        1,
+    )[0]
+    assert "self.shared_context.set_mode(mode)" in mode_switch_block
+    assert "self.simple_panel.refresh_from_shared_state()" in mode_switch_block
+    assert "self._sync_live_points_mouse_callback()" in simple_source
+    assert 'if self.shared_context.get_mode() != "simple":' in simple_source
+    shared_source = LIVE_POINTS_ACCEPT_SOURCE.read_text(encoding="utf-8")
+    assert "LivePointsContextMenu" in simple_source
+    assert "has_mouse_button = hasattr(native, \"button\") or hasattr(native, \"buttons\")" in shared_source
+
+
+def test_advanced_live_points_uses_shared_right_click_accept_menu():
+    advanced_source = ADVANCED_WIDGET_SOURCE.read_text(encoding="utf-8")
+    shared_source = LIVE_POINTS_ACCEPT_SOURCE.read_text(encoding="utf-8")
+
+    assert "LivePointsAcceptService, LivePointsContextMenu" in advanced_source
+    assert "self.live_points_accept = LivePointsAcceptService" in advanced_source
+    assert "self.live_points_context_menu = LivePointsContextMenu" in advanced_source
+    assert "def _live_points_context_menu_enabled" in advanced_source
+    assert "return self._live_refinement_shortcuts_enabled()" in advanced_source
+    assert "active_layer = layer if self._live_points_context_menu_enabled() else None" in advanced_source
+    assert "self.live_points_context_menu.sync_mouse_callback(active_layer)" in advanced_source
+    assert "Accept + Clear" in shared_source
+    assert "Accept Only" in shared_source
+    assert "Undo Last Accept" in shared_source
 
 
 def test_loading_model_does_not_implicitly_create_prompt_layer():

@@ -19,6 +19,14 @@ class FakeLabelsLayer:
         self.refresh_count += 1
 
 
+class FakeShapesLayer:
+    def __init__(self, data, name, **kwargs):
+        self.data = data
+        self.name = name
+        self.shape_type = kwargs.get("shape_type")
+        self.properties = kwargs.get("properties")
+
+
 class FakeImageLayer:
     def __init__(
         self,
@@ -49,6 +57,11 @@ class FakeViewer:
 
     def add_labels(self, data, name, **kwargs):
         layer = FakeLabelsLayer(data, name, **kwargs)
+        self.layers[name] = layer
+        return layer
+
+    def add_shapes(self, data, name, **kwargs):
+        layer = FakeShapesLayer(data, name, **kwargs)
         self.layers[name] = layer
         return layer
 
@@ -160,3 +173,32 @@ def test_global_image_2d_result_from_3d_source_uses_spatial_transform_only():
     np.testing.assert_array_equal(layer.rotate, np.eye(2))
     assert layer.shear is None
     assert layer.affine is None
+
+
+def test_tiled_exemplar_result_writes_preview_boxes_layer():
+    viewer = FakeViewer()
+    writer = LayerWriter(viewer)
+    labels = np.zeros((20, 20), dtype=np.uint32)
+    labels[4:10, 5:12] = 1
+
+    writer.write_result(
+        Sam3Result(
+            task=Sam3Task.EXEMPLAR,
+            labels=labels,
+            boxes_xyxy=np.asarray([[5, 4, 12, 10]], dtype=np.float32),
+            scores=np.asarray([0.8], dtype=np.float32),
+            metadata={"large_image_tiled_scan": True},
+        ),
+        labels_name="SAM3 tiled exemplar labels",
+        boxes_name="SAM3 tiled exemplar boxes",
+    )
+
+    assert "SAM3 tiled exemplar boxes" in viewer.layers
+    layer = viewer.layers["SAM3 tiled exemplar boxes"]
+    assert layer.shape_type == "rectangle"
+    assert len(layer.data) == 1
+    np.testing.assert_allclose(
+        layer.data[0],
+        np.asarray([[4, 5], [4, 12], [10, 12], [10, 5]], dtype=float),
+    )
+    np.testing.assert_allclose(layer.properties["score"], np.asarray([0.8], dtype=np.float32))

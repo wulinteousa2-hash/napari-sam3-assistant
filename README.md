@@ -145,16 +145,26 @@ Fast local segmentation loop:
 1. Use `Exemplar`, `2D Slice`, or a box/Shapes prompt to create a preview.
 2. Switch to `Live Points` when the preview is close.
 3. Add positive points on missed parts and negative points on leakage.
-4. Use the Live Points right-click menu to `Accept + Clear`.
+4. Use the Live Points right-click menu to `Accept + Clear`. This menu is available in both Simple mode and Advanced mode while Live Points is active.
 5. Click `Save Labels` or `Save & Clean`.
 6. Move to the next object or ROI and repeat.
+
+Large-image ROI loop:
+
+1. Enable local/tiled inference and choose a tile/ROI size.
+2. Draw or select a prompt box/point.
+3. Click `Run Current ROI Only` to test that local region.
+4. Changing ROI size recomputes the next local region; previous active ROIs are reused only when the requested size still matches.
 
 Exemplar scan loop:
 
 1. Draw a tight exemplar region around a representative object.
 2. Run the current ROI first.
 3. If the ROI result is good, scan the full image by tiles.
-4. Use `SAM3 Mask Operations` for cleanup, isolation, merge, and export.
+4. Review `SAM3 tiled exemplar labels` and `SAM3 tiled exemplar boxes`.
+5. Use `SAM3 Mask Operations` for cleanup, isolation, merge, and export.
+
+Tiled exemplar scans are a search workflow, not an exact repeat of `Run Current ROI Only`. The current tiled scan uses one exemplar crop as a visual reference for each tile by composing an exemplar-plus-tile image, then writes the tile-side result back to the full canvas. Multiple boxes in the current ROI can help `Run Current ROI Only` when they overlap that ROI, but tiled scan currently uses the first collected exemplar crop as the default reference for all tiles.
 
 Advanced mode also includes `Detection threshold`, with default `0.35`. Lower
 values accept weaker candidates and may add false positives. Higher values are
