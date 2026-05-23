@@ -107,6 +107,8 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     assert "Open Folder" in advanced_source
     assert "quick_mask_output_dir" in advanced_source
     assert "MaskExportService" in advanced_source
+    assert "OME-Zarr" in advanced_source
+    assert "self._copy_layer_geometry(preview, saved_layer)" in advanced_source
     assert "PNG is only available for 2D masks. Using TIFF for this 3D/video preview." in advanced_source
     assert "Completed {action}; removed {removed} preview layer(s)." in advanced_source
     assert "Start 3D Propagation" in advanced_source

@@ -2,6 +2,15 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.3.6
+
+### Added
+- Added `OME-Zarr` as a preview-mask export format for large 2D masks and 3D stack masks, with nearest-neighbor multiscale pyramids and scale metadata when available.
+- Added `zarr` and `ome-zarr` as package dependencies for chunked large-mask export.
+
+### Fixed
+- Preserved preview mask layer geometry after `Save && Clean` re-adds the saved mask layer to napari, preventing OME-Zarr-derived masks from appearing smaller or misaligned despite matching pixel dimensions.
+
 ## 4.3.5
 
 ### Added

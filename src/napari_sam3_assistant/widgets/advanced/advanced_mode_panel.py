@@ -1043,7 +1043,7 @@ class AdvancedModePanel(QWidget):
         folder_row.addWidget(self.preview_output_browse_btn)
 
         self.preview_output_format_combo = QComboBox()
-        self.preview_output_format_combo.addItems(["TIFF", "NumPy (.npy)", "PNG"])
+        self.preview_output_format_combo.addItems(["TIFF", "OME-Zarr", "NumPy (.npy)", "PNG"])
         self.preview_output_format_combo.setMaximumWidth(160)
         self.preview_output_format_combo.currentTextChanged.connect(self._on_preview_output_format_changed)
 
@@ -3710,7 +3710,7 @@ class AdvancedModePanel(QWidget):
 
     def _sync_preview_output_formats(self, preview_layer: Any) -> None:
         previous = self.preview_output_format_combo.currentText()
-        formats = ["TIFF", "NumPy (.npy)"]
+        formats = ["TIFF", "OME-Zarr", "NumPy (.npy)"]
         if np.asarray(preview_layer.data).ndim == 2:
             formats.append("PNG")
         current_items = [
@@ -3777,11 +3777,13 @@ class AdvancedModePanel(QWidget):
             data = preview.data.copy()
             saved_layer_name = self._unique_layer_name(Path(target_path).stem)
             try:
-                exported = self.mask_export_service.export(data, target_path, fmt)
+                scale = tuple(float(value) for value in getattr(preview, "scale", ())) or None
+                exported = self.mask_export_service.export(data, target_path, fmt, scale=scale)
             except Exception as exc:
                 self._log(f"Could not save preview mask '{getattr(preview, 'name', 'preview')}': {exc}")
                 return
-            self.viewer.add_labels(data, name=saved_layer_name)
+            saved_layer = self.viewer.add_labels(data, name=saved_layer_name)
+            self._copy_layer_geometry(preview, saved_layer)
             exported_paths.append(exported)
             saved_layer_names.append(saved_layer_name)
 
@@ -3876,6 +3878,8 @@ class AdvancedModePanel(QWidget):
             return f"{Path(stem).stem}.npy"
         if fmt_key == "png":
             return f"{Path(stem).stem}.png"
+        if fmt_key in {"ome-zarr", "ome zarr", "ome-zarr (.ome.zarr)", "ome zarr (.ome.zarr)"}:
+            return f"{Path(stem).stem}.ome.zarr"
         return f"{Path(stem).stem}.tif"
 
     def _safe_file_stem(self, value: str) -> str:

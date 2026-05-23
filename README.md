@@ -2,6 +2,8 @@
 
 ![napari-sam3-assistant UI](docs/ui.png)
 
+Latest version: `4.3.6`
+
 `napari-sam3-assistant` is a napari plugin for local Segment Anything Model 3
 (SAM3) segmentation. It provides:
 
