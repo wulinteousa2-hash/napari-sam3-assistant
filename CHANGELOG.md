@@ -2,10 +2,20 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.3.8
+
+### Added
+- Added Phase 1 Huge Volume Mode for Advanced Exemplar workflows: `Scan all Z slices to OME-Zarr` repeats tiled 2D exemplar scanning through each Z/frame slice and writes tile labels directly to an output OME-Zarr mask store.
+- Added a `huge_volume` mask store for region-based OME-Zarr label writes without creating a dense full-volume `Labels` array.
+
+### Changed
+- Z-stack tiled scans currently skip seam merging, cross-Z object linking, resumable job metadata, and Mask Operations write-back; these remain later Huge Volume phases.
+
 ## 4.3.6
 
 ### Added
 - Added `OME-Zarr` as a preview-mask export format for large 2D masks and 3D stack masks, with nearest-neighbor multiscale pyramids and scale metadata when available.
+- Added a Huge Volume Mode architecture task documenting chunk-based TIFF/OME-Zarr segmentation and Mask Operations write-back requirements.
 - Added `zarr` and `ome-zarr` as package dependencies for chunked large-mask export.
 
 ### Fixed

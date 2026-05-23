@@ -65,6 +65,9 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     assert "Enable large-image local inference" in advanced_source
     assert "Use separate crop image" in advanced_source
     assert "Scan Target Image by Tiles" in advanced_source
+    assert "Scan all Z slices to OME-Zarr" in advanced_source
+    assert "Scan Z Stack by Tiles" in advanced_source
+    assert "HugeVolumeMaskStore" in advanced_source
     assert "_collect_external_exemplar_patch" in advanced_source
     assert "512 x 512" in advanced_source
     assert "1024 x 1024" in advanced_source

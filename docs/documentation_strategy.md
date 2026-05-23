@@ -30,7 +30,8 @@ The `docs/` folder carries task documentation:
 - `user_guide.md`: Simple, Advanced, prompts, large images, batch, 3D/video;
 - `mask_operations.md`: cleanup, isolation, merge, export;
 - `troubleshooting.md`: common failures and concrete checks;
-- `cpu_only.md`: specialized CPU-only setup.
+- `cpu_only.md`: specialized CPU-only setup;
+- `huge_volume_mode.md`: architecture task for chunk-based TIFF/OME-Zarr volume segmentation.
 
 ## Writing Rules
 

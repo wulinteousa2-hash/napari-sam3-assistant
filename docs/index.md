@@ -17,6 +17,7 @@ New users should read these in order:
 3. [User guide](user_guide.md)
 4. [Mask operations](mask_operations.md)
 5. [Troubleshooting](troubleshooting.md)
+6. [Huge Volume Mode](huge_volume_mode.md)
 
 Specialized setup:
 

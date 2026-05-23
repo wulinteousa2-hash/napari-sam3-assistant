@@ -2,7 +2,7 @@
 
 ![napari-sam3-assistant UI](docs/ui.png)
 
-Latest version: `4.3.6`
+Latest version: `4.3.8`
 
 `napari-sam3-assistant` is a napari plugin for local Segment Anything Model 3
 (SAM3) segmentation. It provides:
@@ -25,6 +25,7 @@ corrected, saved, and exported.
   crop image.
 - Correct previews with Live Points using positive and negative clicks.
 - Run local ROI inference on large TIFF or OME-Zarr-style images.
+- In Advanced mode, run Phase 1 Huge Volume exemplar scans by processing 3D stacks slice by slice and writing tiled masks directly to OME-Zarr.
 - Scan large 2D images tile by tile from an exemplar ROI and stitch the result
   into full-size labels.
 - Propagate prompts through 3D stacks or video-like data when the installed SAM3
@@ -41,6 +42,7 @@ Start here:
 3. [User guide](docs/user_guide.md)
 4. [Mask operations](docs/mask_operations.md)
 5. [Troubleshooting](docs/troubleshooting.md)
+6. [Huge Volume Mode](docs/huge_volume_mode.md)
 
 Specialized setup:
 
@@ -167,6 +169,8 @@ Exemplar scan loop:
 5. Use `SAM3 Mask Operations` for cleanup, isolation, merge, and export.
 
 Tiled exemplar scans are a search workflow, not an exact repeat of `Run Current ROI Only`. The current tiled scan uses one exemplar crop as a visual reference for each tile by composing an exemplar-plus-tile image, then writes the tile-side result back to the full canvas. Multiple boxes in the current ROI can help `Run Current ROI Only` when they overlap that ROI, but tiled scan currently uses the first collected exemplar crop as the default reference for all tiles.
+
+Huge Volume Phase 1 is available in Advanced Exemplar mode for 3D stacks. Enable `Enable large-image local inference`, check `Scan all Z slices to OME-Zarr`, then use `Scan Z Stack by Tiles`. This path writes tile labels directly to an OME-Zarr mask store and does not create a full in-memory volume. Seam merging, cross-Z object linking, resumable jobs, and Mask Operations write-back are planned later phases.
 
 Advanced mode also includes `Detection threshold`, with default `0.35`. Lower
 values accept weaker candidates and may add false positives. Higher values are

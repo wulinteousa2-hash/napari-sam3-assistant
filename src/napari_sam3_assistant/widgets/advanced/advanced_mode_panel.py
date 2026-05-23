@@ -1,5 +1,6 @@
 from __future__ import annotations
 import csv
+from dataclasses import replace
 import gc
 from pathlib import Path
 import re
@@ -75,6 +76,7 @@ from ...services.prompt_collector import PromptCollector
 from ...services.prompt_state_service import PromptStateService
 from ...mask_operations import MaskOperationsPanel
 from ...mask_operations.export_service import MaskExportService
+from ...huge_volume import HugeVolumeMaskStore
 from ...notifications import TaskCompleteSound
 from ..collapsible_panel import CollapsiblePanel
 from ..live_point_refinement import LivePointRefinementController
@@ -771,6 +773,15 @@ class AdvancedModePanel(QWidget):
             "straight tile boundaries. This checks only narrow tile seam bands."
         )
 
+        self.z_stack_tiled_scan_check = QCheckBox("Scan all Z slices to OME-Zarr")
+        self.z_stack_tiled_scan_check.setChecked(False)
+        self.z_stack_tiled_scan_check.setEnabled(False)
+        self.z_stack_tiled_scan_check.setToolTip(
+            "Huge-volume mode for 3D stacks: repeat the tiled exemplar scan for "
+            "each Z/frame slice and write mask chunks directly to an OME-Zarr store."
+        )
+        self.z_stack_tiled_scan_check.toggled.connect(self._sync_run_controls)
+
         self.exemplar_source_combo = QComboBox()
         self.exemplar_source_combo.addItem("Use box from target image", "target")
         self.exemplar_source_combo.addItem("Use separate crop image", "crop")
@@ -827,6 +838,7 @@ class AdvancedModePanel(QWidget):
         task_layout.addRow("ROI size", self.roi_size_combo)
         task_layout.addRow("Tile overlap", self.tile_overlap_spin)
         task_layout.addRow("", self.merge_tile_seams_check)
+        task_layout.addRow("", self.z_stack_tiled_scan_check)
         task_layout.addRow("Exemplar source", self.exemplar_source_combo)
         task_layout.addRow("Exemplar crop image", self.exemplar_crop_layer_combo)
         task_layout.addRow("Crop region", self.exemplar_crop_region_combo)
@@ -1306,6 +1318,9 @@ class AdvancedModePanel(QWidget):
         if hasattr(self, "merge_tile_seams_check"):
             self.merge_tile_seams_check.setEnabled(large_image_enabled)
             self.merge_tile_seams_check.setVisible(large_image_enabled)
+        if hasattr(self, "z_stack_tiled_scan_check"):
+            self.z_stack_tiled_scan_check.setEnabled(large_image_enabled and is_exemplar)
+            self.z_stack_tiled_scan_check.setVisible(large_image_enabled and is_exemplar)
         if hasattr(self, "_roi_size_row_label") and self._roi_size_row_label is not None:
             self._roi_size_row_label.setVisible(large_image_enabled)
         if hasattr(self, "_tile_overlap_row_label") and self._tile_overlap_row_label is not None:
@@ -1377,7 +1392,13 @@ class AdvancedModePanel(QWidget):
                 and self._current_task() == Sam3Task.EXEMPLAR
                 and self._large_image_mode_enabled()
             )
-            if self._external_exemplar_source_enabled():
+            if self._z_stack_tiled_scan_enabled():
+                self.batch_local_exemplar_btn.setText("Scan Z Stack by Tiles")
+                self.batch_local_exemplar_btn.setToolTip(
+                    "Repeat tiled exemplar scanning through all Z/frame slices and write "
+                    "mask chunks directly to OME-Zarr."
+                )
+            elif self._external_exemplar_source_enabled():
                 self.batch_local_exemplar_btn.setText("Scan Target Image by Tiles")
                 self.batch_local_exemplar_btn.setToolTip(
                     "Scan the selected target image by tiles using a separate crop image "
@@ -1741,6 +1762,9 @@ class AdvancedModePanel(QWidget):
             self._log("Enable large-image local inference before scanning the full image by tiles.")
             self.activity_status.set_ready()
             return
+        if self._z_stack_tiled_scan_enabled():
+            self._run_z_stack_tiled_exemplar_task()
+            return
         roi_hw = self._selected_roi_size()
         overlap_fraction = float(self.tile_overlap_spin.value()) / 100.0
         merge_tile_seams = bool(self.merge_tile_seams_check.isChecked())
@@ -1930,6 +1954,192 @@ class AdvancedModePanel(QWidget):
                 f"Using crop layer '{exemplar_source_name}' as exemplar source and scanning "
                 f"{len(jobs)} target image layer(s) by tiles."
             )
+
+    def _z_stack_tiled_scan_enabled(self) -> bool:
+        return bool(
+            hasattr(self, "z_stack_tiled_scan_check")
+            and self.z_stack_tiled_scan_check.isChecked()
+        )
+
+    def _run_z_stack_tiled_exemplar_task(self) -> None:
+        if self.viewer is None:
+            self._log("No napari viewer was provided to the widget.")
+            self.activity_status.set_ready()
+            return
+        if self.batch_all_images_check.isChecked():
+            self._log("Z-stack tiled scanning runs on the selected 3D image layer, not Batch all image layers.")
+            self.activity_status.set_ready()
+            return
+
+        roi_hw = self._selected_roi_size()
+        overlap_fraction = float(self.tile_overlap_spin.value()) / 100.0
+        output_path: Path | None = None
+        try:
+            bundle = self._collect_bundle_for_tiled_exemplar()
+            if bundle.image.frame_axis is None:
+                raise RuntimeError("The selected image has no Z/frame axis. Disable Z scanning for 2D images.")
+            frame_count = selection_frame_count(bundle.image)
+            if frame_count <= 1:
+                raise RuntimeError("The selected image has only one frame/slice.")
+            if self._external_exemplar_source_enabled():
+                exemplar, exemplar_source_name = self._collect_external_exemplar_patch()
+            else:
+                exemplar, exemplar_source_name = self._collect_tiled_exemplar_patch(bundle)
+            cpu_error = self._cpu_bundle_support_error(bundle)
+            if cpu_error:
+                raise RuntimeError(cpu_error)
+            image_layer = self.viewer.layers[bundle.image.layer_name]
+            image_hw = self._selection_image_hw(bundle.image)
+            exemplar_hw = tuple(int(value) for value in np.asarray(exemplar).shape[:2])
+            if exemplar_hw[0] > roi_hw[0] or exemplar_hw[1] > roi_hw[1]:
+                raise RuntimeError(
+                    "The exemplar crop is larger than the tile size. Select a smaller crop or increase ROI size."
+                )
+            tiles = self._tile_bounds_for_image(image_hw, roi_hw, overlap_fraction)
+            if not tiles:
+                raise RuntimeError(f"No tiles were generated for image layer '{bundle.image.layer_name}'.")
+            output_path = self._z_stack_mask_output_path(bundle.image.layer_name)
+        except Exception as exc:
+            self._log(f"Cannot collect Z-stack tiled scan inputs: {exc}")
+            self.activity_status.set_ready()
+            return
+
+        try:
+            adapter = self._ensure_adapter()
+        except Exception as exc:
+            self._log(f"Cannot run Z-stack tiled scan: {exc}")
+            self.activity_status.set_ready()
+            return
+
+        self._clear_results_table()
+        if self.merge_tile_seams_check.isChecked():
+            self._log("Z-stack tiled scan writes chunks directly to OME-Zarr; seam merge is skipped in this mode.")
+
+        @thread_worker
+        def run_z_stack_tiled_exemplar():
+            assert output_path is not None
+            frame_count = selection_frame_count(bundle.image)
+            total_tiles = len(tiles)
+            total_steps = frame_count * total_tiles
+            scale = self._selection_scale_zyx(image_layer, bundle.image)
+            store = HugeVolumeMaskStore.create(
+                output_path,
+                shape=(frame_count, int(image_hw[0]), int(image_hw[1])),
+                chunks=self._huge_volume_mask_chunks(image_hw, roi_hw),
+                dtype=np.uint32,
+                scale=scale,
+            )
+            self._ensure_image_adapter_loaded_for_bundle(adapter, bundle)
+            total_written = 0
+            step = 0
+            for z_index in range(frame_count):
+                frame_selection = replace(bundle.image, frame_index=z_index)
+                frame_bundle = replace(bundle, image=frame_selection)
+                next_object_id = 1
+                for tile_index, bounds in enumerate(tiles, start=1):
+                    step += 1
+                    yield (
+                        f"Z-stack tiled scan {step}/{total_steps}: "
+                        f"z={z_index + 1}/{frame_count}, tile {tile_index}/{total_tiles}, "
+                        f"y={bounds.y0}:{bounds.y1}, x={bounds.x0}:{bounds.x1}"
+                    )
+                    tile = extract_2d_roi(image_layer.data, frame_selection, bounds)
+                    augmented, tile_origin, exemplar_box = self._augmented_exemplar_tile(tile, np.asarray(exemplar))
+                    tile_bundle = self._bundle_for_augmented_exemplar(frame_bundle, augmented, exemplar_box)
+                    result = adapter.run_image(
+                        augmented,
+                        tile_bundle,
+                        cache_context=self._cache_context_for_layer(
+                            image_layer,
+                            frame_bundle,
+                            roi_bounds=bounds,
+                        ),
+                    )
+                    local_labels = self._result_labels_for_tile(
+                        result,
+                        augmented.shape,
+                        tile_origin,
+                        (bounds.height, bounds.width),
+                    )
+                    next_object_id, written = store.write_tile_labels(
+                        z_index,
+                        bounds.y0,
+                        bounds.x0,
+                        local_labels,
+                        next_object_id=next_object_id,
+                    )
+                    total_written += written
+            yield {
+                "path": str(store.path),
+                "frame_count": frame_count,
+                "tile_count": total_tiles,
+                "written_pixels": total_written,
+            }
+
+        def handle_z_stack_output(payload: object) -> None:
+            if isinstance(payload, dict):
+                self._last_quick_mask_path = Path(str(payload["path"]))
+                self._log(
+                    "Z-stack tiled scan wrote "
+                    f"{int(payload['written_pixels'])} labeled pixel(s) across "
+                    f"{int(payload['frame_count'])} slice(s) and "
+                    f"{int(payload['tile_count'])} tile(s) per slice to {payload['path']}."
+                )
+                return
+            self._log(str(payload))
+
+        worker = run_z_stack_tiled_exemplar()
+        worker.yielded.connect(handle_z_stack_output)
+        self._start_worker(worker, activity_status="Z-stack tiled scan running...")
+        self._log(
+            f"Started Z-stack tiled exemplar scan: {frame_count} slice(s), {len(tiles)} tile(s) per slice, "
+            f"tile size {roi_hw[1]} x {roi_hw[0]}, overlap {self.tile_overlap_spin.value()}%, "
+            f"output {output_path}."
+        )
+        self._log(f"Using exemplar source '{exemplar_source_name}'.")
+
+    def _z_stack_mask_output_path(self, image_layer_name: str) -> Path:
+        output_dir = self.preview_output_folder_edit.text().strip() if hasattr(self, "preview_output_folder_edit") else ""
+        if not output_dir:
+            selected = QFileDialog.getExistingDirectory(
+                self,
+                "Select Z-stack mask OME-Zarr output folder",
+                str(Path.home()),
+            )
+            if not selected:
+                raise RuntimeError("Choose an output folder before scanning a Z stack.")
+            self.preview_output_folder_edit.setText(selected)
+            self._save_settings()
+            output_dir = selected
+        folder = Path(output_dir)
+        folder.mkdir(parents=True, exist_ok=True)
+        base = f"{self._safe_file_stem(image_layer_name)}_zstack_mask"
+        stem = self._next_quick_mask_stem(base, folder, "OME-Zarr")
+        return folder / self._filename_for_format(stem, "OME-Zarr")
+
+    def _selection_scale_zyx(self, image_layer: Any, selection: Any) -> tuple[float, float, float] | None:
+        scale = getattr(image_layer, "scale", None)
+        if scale is None:
+            return None
+        try:
+            values = tuple(float(value) for value in scale)
+        except Exception:
+            return None
+        axes = (selection.frame_axis, *selection.spatial_axes)
+        if any(axis is None or int(axis) >= len(values) for axis in axes):
+            return None
+        return tuple(values[int(axis)] for axis in axes)  # type: ignore[arg-type]
+
+    def _huge_volume_mask_chunks(
+        self,
+        image_hw: tuple[int, int],
+        roi_hw: tuple[int, int],
+    ) -> tuple[int, int, int]:
+        return (
+            1,
+            max(1, min(int(image_hw[0]), int(roi_hw[0]), 2048)),
+            max(1, min(int(image_hw[1]), int(roi_hw[1]), 2048)),
+        )
 
     def _tiled_exemplar_target_layer_names(self) -> list[str]:
         if self.viewer is None:
