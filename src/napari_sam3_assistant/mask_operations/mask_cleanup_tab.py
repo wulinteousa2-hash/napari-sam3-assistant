@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 from typing import Callable
 
 import numpy as np
+from qtpy.QtCore import QTimer
 from qtpy.QtGui import QCursor
 from qtpy.QtWidgets import (
     QAbstractItemView,
@@ -11,6 +13,7 @@ from qtpy.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QFormLayout,
     QGridLayout,
     QHBoxLayout,
@@ -31,10 +34,12 @@ from qtpy.QtWidgets import (
 
 from .cleanup_service import MaskCleanupService
 from .component_analysis_service import ComponentAnalysisService
+from .export_service import MaskExportService
 from .fast_component_index_service import FastComponentIndex, FastComponentIndexService
 from .component_table_widget import ComponentTableWidget
-from .models import AxonHoleCandidate
+from .models import AxonHoleCandidate, ComponentRecord
 from .utils import copy_layer_geometry, image_layer_names, labels_layer_names, safe_get_layer, shapes_layer_names, unique_layer_name
+from ..huge_volume import HugeVolumeMaskStore
 from ..widgets.collapsible_panel import CollapsiblePanel
 
 
@@ -53,6 +58,7 @@ class MaskCleanupTab(QWidget):
         self.analysis = ComponentAnalysisService()
         self.fast_index_builder = FastComponentIndexService()
         self.cleanup = MaskCleanupService()
+        self.export_service = MaskExportService()
         self._mouse_layer = None
         self._mouse_callback = self._handle_mouse_action
         self._mouse_double_click_callback = self._handle_mouse_double_click
@@ -72,6 +78,7 @@ class MaskCleanupTab(QWidget):
         self._batch_preview_layer_name: str | None = None
         self._batch_preview_indexer: object = Ellipsis
         self._batch_preview_shape: tuple[int, ...] | None = None
+        self._pending_region_edits: dict[tuple, np.ndarray] = {}
         self._build_ui()
         self.refresh()
 
@@ -114,6 +121,48 @@ class MaskCleanupTab(QWidget):
         self._track_target_layer()
         self._sync_mouse_action_callback()
 
+    def choose_region_output_path(self) -> None:
+        fmt = self.region_output_format_combo.currentData()
+        if fmt == "ome_zarr":
+            selected = QFileDialog.getExistingDirectory(self, "Select mask OME-Zarr store", str(Path.home()))
+            if selected:
+                self.region_output_path_edit.setText(selected)
+            return
+        selected, _filter = QFileDialog.getSaveFileName(
+            self,
+            "Export working region",
+            "",
+            "TIFF masks (*.tif *.tiff)",
+        )
+        if selected:
+            self.region_output_path_edit.setText(selected)
+
+    def save_working_region(self) -> None:
+        layer = self._target_layer()
+        if layer is None:
+            self._log("Select a target Labels layer before saving the working region.")
+            return
+        path_text = self.region_output_path_edit.text().strip()
+        if not path_text:
+            self._log("Choose an output path for the working region.")
+            return
+        sub, indexer, _offset = self._scoped_data(layer)
+        fmt = self.region_output_format_combo.currentData()
+        if fmt == "tiff":
+            try:
+                path = self.export_service.export(sub, path_text, "TIFF")
+            except Exception as exc:
+                self._log(f"Working region TIFF export failed: {exc}")
+                return
+            self._log(f"Exported {layer.name} working region to {path}.")
+            return
+        try:
+            self._write_working_region_to_ome_zarr(layer, sub, indexer, Path(path_text))
+        except Exception as exc:
+            self._log(f"OME-Zarr write-back failed: {exc}")
+            return
+        self._log(f"Wrote {layer.name} working region back to {path_text}/s0.")
+
     def analyze_layer(self) -> None:
         layer = self._target_layer()
         if layer is None:
@@ -137,7 +186,7 @@ class MaskCleanupTab(QWidget):
         self._last_analysis_indexer = indexer
         self._last_analysis_offset = offset
         records = self._fast_index.active_records()
-        self.component_table.set_records(records)
+        self.component_table.set_records(self._component_records_for_display(layer, indexer, records))
         self.status_label.setText(f"Fast index ready: {len(records)} component(s) indexed in {scope}.")
         self.analysis_progress.setValue(100)
         self.analysis_progress.setFormat(f"100% - Indexed {len(records)} component(s)")
@@ -163,7 +212,7 @@ class MaskCleanupTab(QWidget):
             return
         cleaned, changed = fast_index.delete_components(sub, ids)
         if changed and self._replace_scoped_layer_data(layer, cleaned, indexer, "delete selected components", invalidate_fast_index=False):
-            self.component_table.set_records(fast_index.active_records())
+            self.component_table.set_records(self._component_records_for_display(layer, indexer, fast_index.active_records()))
             self.refresh_unique_values()
             self._log(f"Deleted {len(ids)} selected component(s) from {layer.name} ({changed} pixel(s)/voxel(s)).")
         else:
@@ -183,7 +232,7 @@ class MaskCleanupTab(QWidget):
             return
         data, changed = fast_index.relabel_components(sub, ids, new_value)
         if changed and self._replace_scoped_layer_data(layer, data, indexer, "assign selected components", invalidate_fast_index=False):
-            self.component_table.set_records(fast_index.active_records())
+            self.component_table.set_records(self._component_records_for_display(layer, indexer, fast_index.active_records()))
             self.refresh_unique_values()
             self._select_value_row(new_value)
             self._log(
@@ -947,16 +996,18 @@ class MaskCleanupTab(QWidget):
             delete_value_action = menu.addAction(f"Delete clicked value {label_value}")
             keep_value_action = menu.addAction(f"Keep value {label_value} only")
             select_action = menu.addAction("Select value row only")
-            selected_action = menu.exec_(self._event_global_position(event))
-            if selected_action == relabel_value_action:
-                self.values_to_replace_edit.setText(str(label_value))
-                self.apply_relabel()
-            elif selected_action == delete_value_action:
-                self._apply_mouse_action(layer, event, "delete_value")
-            elif selected_action == keep_value_action:
-                self._apply_mouse_action(layer, event, "keep_value_only")
-            elif selected_action == select_action:
-                self._select_value_row(label_value)
+            def handle_values_action(selected_action):
+                if selected_action == relabel_value_action:
+                    self.values_to_replace_edit.setText(str(label_value))
+                    self.apply_relabel()
+                elif selected_action == delete_value_action:
+                    self._apply_mouse_action(layer, event, "delete_value")
+                elif selected_action == keep_value_action:
+                    self._apply_mouse_action(layer, event, "keep_value_only")
+                elif selected_action == select_action:
+                    self._select_value_row(label_value)
+
+            self._show_canvas_menu(menu, event, handle_values_action)
             return
 
         if mode == "components":
@@ -975,16 +1026,18 @@ class MaskCleanupTab(QWidget):
             delete_component_action = menu.addAction("Delete indexed component")
             delete_component_action.setToolTip("Set only the clicked connected component to background.")
             locate_action = menu.addAction("Select table row only")
-            selected_action = menu.exec_(self._event_global_position(event))
-            if selected_action == assign_current_action:
-                self._apply_mouse_action(layer, event, "assign_component")
-            elif selected_action in quick_assign_actions:
-                self.set_assignment_value(quick_assign_actions[selected_action])
-                self._apply_mouse_action(layer, event, "assign_component")
-            elif selected_action == delete_component_action:
-                self._apply_mouse_action(layer, event, "delete_component")
-            elif selected_action == locate_action:
-                self.component_table.select_component_id(component_id)
+            def handle_component_action(selected_action):
+                if selected_action == assign_current_action:
+                    self._apply_mouse_action(layer, event, "assign_component")
+                elif selected_action in quick_assign_actions:
+                    self.set_assignment_value(quick_assign_actions[selected_action])
+                    self._apply_mouse_action(layer, event, "assign_component")
+                elif selected_action == delete_component_action:
+                    self._apply_mouse_action(layer, event, "delete_component")
+                elif selected_action == locate_action:
+                    self.component_table.select_component_id(component_id)
+
+            self._show_canvas_menu(menu, event, handle_component_action)
             return
 
         assign_local_action = menu.addAction(f"Assign clicked local object to {int(self.assignment_value_spin.value())}")
@@ -1008,17 +1061,33 @@ class MaskCleanupTab(QWidget):
                 assign_local_action,
                 cut_axon_action,
             )
-        selected_action = menu.exec_(self._event_global_position(event))
-        if cut_axon_action is not None and selected_action == cut_axon_action:
-            self._apply_mouse_action(layer, event, "cut_axon")
-        elif selected_action == assign_local_action:
-            self._apply_mouse_action(layer, event, "assign_local_component")
-        elif selected_action == delete_local_action:
-            self._apply_mouse_action(layer, event, "delete_local_component")
-        elif selected_action == delete_value_action:
-            self._apply_mouse_action(layer, event, "delete_value")
-        elif selected_action == select_action:
-            self._select_value_row(label_value)
+        def handle_local_action(selected_action):
+            if cut_axon_action is not None and selected_action == cut_axon_action:
+                self._apply_mouse_action(layer, event, "cut_axon")
+            elif selected_action == assign_local_action:
+                self._apply_mouse_action(layer, event, "assign_local_component")
+            elif selected_action == delete_local_action:
+                self._apply_mouse_action(layer, event, "delete_local_component")
+            elif selected_action == delete_value_action:
+                self._apply_mouse_action(layer, event, "delete_value")
+            elif selected_action == select_action:
+                self._select_value_row(label_value)
+
+        self._show_canvas_menu(menu, event, handle_local_action)
+
+    def _show_canvas_menu(self, menu: QMenu, event, callback) -> None:
+        position = self._event_global_position(event)
+        self._active_canvas_menu = menu
+
+        def run_menu() -> None:
+            try:
+                selected_action = menu.exec_(position)
+                callback(selected_action)
+            finally:
+                if getattr(self, "_active_canvas_menu", None) is menu:
+                    self._active_canvas_menu = None
+
+        QTimer.singleShot(0, run_menu)
 
     def _apply_mouse_action(self, layer, event, action: str) -> None:
         coords = self._event_data_coords(layer, event)
@@ -1130,7 +1199,7 @@ class MaskCleanupTab(QWidget):
                 self._refresh_all()
                 self.status_label.setText(f"{message}. Component table is stale; click Analyze Layer to rebuild.")
             else:
-                self.component_table.set_records(fast_index.active_records())
+                self.component_table.set_records(self._component_records_for_display(layer, indexer, fast_index.active_records()))
                 self.refresh_unique_values()
                 if action == "assign_component":
                     self._select_value_row(int(self.assignment_value_spin.value()))
@@ -1151,7 +1220,7 @@ class MaskCleanupTab(QWidget):
             self._fast_index_layer_id = id(layer)
             self._fast_index_scope_key = scope_key
             self._last_analysis_indexer = indexer
-            self.component_table.set_records(self._fast_index.active_records())
+            self.component_table.set_records(self._component_records_for_display(layer, indexer, self._fast_index.active_records()))
             self.status_label.setText(
                 f"Fast index ready: {len(self._fast_index.active_records())} component(s) indexed."
             )
@@ -1175,22 +1244,122 @@ class MaskCleanupTab(QWidget):
         self._fast_index_scope_key = None
         self._component_index_stale = True
 
-    def _scope_key(self, layer, indexer: object) -> tuple:
-        if indexer is Ellipsis:
-            indexer_key = "all"
-        elif isinstance(indexer, tuple):
-            indexer_key = tuple(
-                ("slice", selector.start, selector.stop, selector.step)
-                if isinstance(selector, slice)
-                else ("int", int(selector))
-                if isinstance(selector, int)
-                else ("other", repr(selector))
-                for selector in indexer
+    def _component_records_for_display(self, layer, indexer: object, records: list[ComponentRecord]) -> list[ComponentRecord]:
+        if indexer is Ellipsis or not records:
+            return records
+        shape = self._layer_shape(layer)
+        if not isinstance(indexer, tuple) or len(indexer) != len(shape):
+            return records
+        display_records: list[ComponentRecord] = []
+        for record in records:
+            bbox = self._global_bbox_from_scoped_bbox(indexer, record.bbox, shape)
+            centroid = self._global_position_from_scoped_position(
+                indexer,
+                self._record_scoped_centroid(record),
+                shape,
             )
-        else:
-            indexer_key = repr(indexer)
-        data = np.asarray(layer.data)
-        return (id(layer), layer.name, tuple(data.shape), str(data.dtype), indexer_key)
+            centroid_z = float(centroid[-3]) if len(centroid) >= 3 else None
+            z_min = int(bbox[-3][0]) if len(bbox) >= 3 else None
+            z_max = int(bbox[-3][1] - 1) if len(bbox) >= 3 else None
+            display_records.append(
+                replace(
+                    record,
+                    centroid_y=float(centroid[-2]) if len(centroid) >= 2 else float(record.centroid_y),
+                    centroid_x=float(centroid[-1]) if len(centroid) >= 1 else float(record.centroid_x),
+                    centroid_z=centroid_z,
+                    z_min=z_min,
+                    z_max=z_max,
+                    bbox=bbox,
+                    ndim=len(shape),
+                )
+            )
+        return display_records
+
+    def _record_scoped_centroid(self, record: ComponentRecord) -> np.ndarray:
+        if int(record.ndim) >= 3 and record.centroid_z is not None:
+            return np.asarray([float(record.centroid_z), float(record.centroid_y), float(record.centroid_x)], dtype=float)
+        return np.asarray([float(record.centroid_y), float(record.centroid_x)], dtype=float)
+
+    def _global_bbox_from_scoped_bbox(
+        self,
+        indexer: tuple[object, ...],
+        scoped_bbox: tuple[tuple[int, int], ...],
+        shape: tuple[int, ...],
+    ) -> tuple[tuple[int, int], ...]:
+        global_bbox: list[tuple[int, int]] = []
+        scoped_axis = 0
+        for axis, selector in enumerate(indexer):
+            if isinstance(selector, (int, np.integer)):
+                value = int(selector)
+                if value < 0:
+                    value += int(shape[axis])
+                global_bbox.append((value, value + 1))
+                continue
+            if scoped_axis >= len(scoped_bbox):
+                global_bbox.append((0, int(shape[axis])))
+                continue
+            lo, hi = scoped_bbox[scoped_axis]
+            if isinstance(selector, slice):
+                start, _stop, step = selector.indices(int(shape[axis]))
+                if step == 1:
+                    global_bbox.append((int(lo) + start, int(hi) + start))
+                else:
+                    global_bbox.append((int(lo), int(hi)))
+            else:
+                global_bbox.append((int(lo), int(hi)))
+            scoped_axis += 1
+        return tuple(global_bbox)
+
+    def _global_position_from_scoped_position(
+        self,
+        indexer: object,
+        scoped_position: np.ndarray,
+        shape: tuple[int, ...],
+    ) -> np.ndarray:
+        scoped = np.asarray(scoped_position, dtype=float)
+        if indexer is Ellipsis or not isinstance(indexer, tuple):
+            return scoped
+        values: list[float] = []
+        scoped_axis = 0
+        for axis, selector in enumerate(indexer):
+            if isinstance(selector, (int, np.integer)):
+                value = int(selector)
+                if value < 0:
+                    value += int(shape[axis])
+                values.append(float(value))
+                continue
+            if scoped_axis >= len(scoped):
+                values.append(0.0)
+                continue
+            value = float(scoped[scoped_axis])
+            if isinstance(selector, slice):
+                start, _stop, step = selector.indices(int(shape[axis]))
+                if step == 1:
+                    value += float(start)
+            values.append(value)
+            scoped_axis += 1
+        return np.asarray(values, dtype=float)
+
+    def _layer_shape(self, layer) -> tuple[int, ...]:
+        shape = getattr(layer.data, "shape", None)
+        if shape is None:
+            shape = np.asarray(layer.data).shape
+        return tuple(int(value) for value in shape)
+
+    def _current_z_shape(self, shape: tuple[int, ...], z_axis: int) -> int:
+        dims = getattr(self.viewer, "dims", None)
+        if dims is None or not shape:
+            return 0
+        try:
+            return max(0, min(int(dims.current_step[z_axis]), int(shape[z_axis]) - 1))
+        except Exception:
+            return 0
+
+    def _scope_key(self, layer, indexer: object) -> tuple:
+        indexer_key = self._indexer_key(indexer)
+        shape = self._layer_shape(layer)
+        dtype = getattr(layer.data, "dtype", None)
+        return (id(layer), layer.name, shape, str(dtype), indexer_key)
 
     def _event_global_position(self, event):
         """Return a reliable global Qt position for a napari canvas mouse event."""
@@ -1409,6 +1578,36 @@ class MaskCleanupTab(QWidget):
         region_form.addRow("X", x_row)
         components_layout.addWidget(QLabel("Working Region"))
         components_layout.addLayout(region_form)
+
+        output_form = QFormLayout()
+        self.region_output_format_combo = QComboBox()
+        self.region_output_format_combo.addItem("OME-Zarr write-back", "ome_zarr")
+        self.region_output_format_combo.addItem("TIFF export", "tiff")
+        self.region_output_format_combo.setToolTip(
+            "Save exactly the current Operation scope plus Working Region. "
+            "OME-Zarr write-back updates s0 in-place; TIFF export writes the selected 2D/3D region as a file."
+        )
+        self.region_output_path_edit = QLineEdit()
+        self.region_output_path_edit.setPlaceholderText("Mask OME-Zarr folder or TIFF output path")
+        choose_output_btn = QPushButton("Choose")
+        choose_output_btn.clicked.connect(self.choose_region_output_path)
+        save_region_btn = QPushButton("Save Working Region")
+        save_region_btn.setToolTip(
+            "For OME-Zarr, write the edited region back to matching z/y/x coordinates. "
+            "For TIFF, export the selected region only."
+        )
+        save_region_btn.clicked.connect(self.save_working_region)
+        output_path_row = QHBoxLayout()
+        output_path_row.addWidget(self.region_output_path_edit)
+        output_path_row.addWidget(choose_output_btn)
+        output_action_row = QHBoxLayout()
+        output_action_row.addWidget(save_region_btn)
+        output_action_row.addStretch(1)
+        output_form.addRow("Format", self.region_output_format_combo)
+        output_form.addRow("Path", output_path_row)
+        output_form.addRow(output_action_row)
+        components_layout.addWidget(QLabel("Region Output"))
+        components_layout.addLayout(output_form)
         components_header = QHBoxLayout()
         components_header.addWidget(analyze_btn)
         components_header.addWidget(delete_btn)
@@ -1803,10 +2002,11 @@ class MaskCleanupTab(QWidget):
 
     def _sync_scope_controls(self) -> None:
         layer = self._target_layer()
-        data = np.asarray(layer.data) if layer is not None else None
-        has_z = data is not None and data.ndim >= 3
-        z_axis = data.ndim - 3 if has_z else 0
-        z_max = int(data.shape[z_axis] - 1) if has_z else 0
+        shape = self._layer_shape(layer) if layer is not None else ()
+        ndim = len(shape)
+        has_z = ndim >= 3
+        z_axis = ndim - 3 if has_z else 0
+        z_max = int(shape[z_axis] - 1) if has_z else 0
         for spin in (self.z_start_spin, self.z_end_spin):
             old = min(int(spin.value()), z_max)
             spin.blockSignals(True)
@@ -1820,7 +2020,7 @@ class MaskCleanupTab(QWidget):
             if idx >= 0:
                 self.scope_combo.setCurrentIndex(idx)
         elif self.scope_combo.currentData() == "current_slice":
-            z = self._current_z(data, z_axis)
+            z = self._current_z_shape(shape, z_axis)
             self.z_start_spin.setValue(z)
             self.z_end_spin.setValue(z)
 
@@ -1828,9 +2028,9 @@ class MaskCleanupTab(QWidget):
         if not hasattr(self, "work_region_combo"):
             return
         layer = self._target_layer()
-        data = np.asarray(layer.data) if layer is not None else None
-        height = int(data.shape[-2]) if data is not None and data.ndim >= 2 else 0
-        width = int(data.shape[-1]) if data is not None and data.ndim >= 2 else 0
+        shape = self._layer_shape(layer) if layer is not None else ()
+        height = int(shape[-2]) if len(shape) >= 2 else 0
+        width = int(shape[-1]) if len(shape) >= 2 else 0
         mode = self.work_region_combo.currentData()
         manual = mode == "manual"
         drawn = mode == "drawn"
@@ -1858,15 +2058,17 @@ class MaskCleanupTab(QWidget):
         self.work_roi_combo.setEnabled(drawn)
 
     def _scoped_data(self, layer) -> tuple[np.ndarray, object, tuple[int, ...]]:
-        arr = np.asarray(layer.data)
-        indexer: list[object] = [slice(None)] * arr.ndim
-        offset = [0] * arr.ndim
+        source = layer.data
+        shape = self._layer_shape(layer)
+        ndim = len(shape)
+        indexer: list[object] = [slice(None)] * ndim
+        offset = [0] * ndim
         reduced_axes: set[int] = set()
-        if arr.ndim >= 3:
+        if ndim >= 3:
             scope = self.scope_combo.currentData()
-            z_axis = arr.ndim - 3
+            z_axis = ndim - 3
             if scope == "current_slice":
-                z = self._current_z(arr, z_axis)
+                z = self._current_z_shape(shape, z_axis)
                 indexer[z_axis] = z
                 offset[z_axis] = z
                 reduced_axes.add(z_axis)
@@ -1875,7 +2077,7 @@ class MaskCleanupTab(QWidget):
                 z1 = max(int(self.z_start_spin.value()), int(self.z_end_spin.value()))
                 indexer[z_axis] = slice(z0, z1 + 1)
                 offset[z_axis] = z0
-        work_region = self._work_region_slices(arr)
+        work_region = self._work_region_slices(source)
         if work_region is not None:
             y_slice, x_slice = work_region
             indexer[-2] = y_slice
@@ -1883,10 +2085,13 @@ class MaskCleanupTab(QWidget):
             offset[-2] = 0 if y_slice.start is None else int(y_slice.start)
             offset[-1] = 0 if x_slice.start is None else int(x_slice.start)
         if all(selector == slice(None) for selector in indexer):
-            return arr.copy(), Ellipsis, tuple(0 for _ in range(arr.ndim))
+            return np.asarray(source).copy(), Ellipsis, tuple(0 for _ in range(ndim))
         scoped_indexer = tuple(indexer)
         scoped_offset = tuple(value for axis, value in enumerate(offset) if axis not in reduced_axes)
-        return arr[scoped_indexer].copy(), scoped_indexer, scoped_offset
+        pending = self.__dict__.get("_pending_region_edits", {}).get(self._region_edit_key(layer, scoped_indexer))
+        if pending is not None:
+            return np.asarray(pending).copy(), scoped_indexer, scoped_offset
+        return np.asarray(source[scoped_indexer]).copy(), scoped_indexer, scoped_offset
 
     def _work_region_slices(self, arr: np.ndarray) -> tuple[slice, slice] | None:
         if arr.ndim < 2 or not hasattr(self, "work_region_combo"):
@@ -1937,6 +2142,90 @@ class MaskCleanupTab(QWidget):
         hi = np.max(np.stack(maxs, axis=0), axis=0)
         return int(lo[0]), int(lo[1]), int(hi[0]), int(hi[1])
 
+    def _region_edit_key(self, layer, indexer: object) -> tuple:
+        return (id(layer), self._indexer_key(indexer))
+
+    def _indexer_key(self, indexer: object):
+        if indexer is Ellipsis:
+            return "all"
+        if isinstance(indexer, tuple):
+            return tuple(
+                ("slice", selector.start, selector.stop, selector.step)
+                if isinstance(selector, slice)
+                else ("int", int(selector))
+                if isinstance(selector, (int, np.integer))
+                else ("other", repr(selector))
+                for selector in indexer
+            )
+        return repr(indexer)
+
+    def _write_working_region_to_ome_zarr(
+        self,
+        layer,
+        scoped_data: np.ndarray,
+        indexer: object,
+        path: Path,
+    ) -> None:
+        store = HugeVolumeMaskStore.open(path)
+        bounds, data = self._ome_zarr_region_from_indexer(layer, indexer, scoped_data)
+        z0, z1, y0, y1, x0, x1 = bounds
+        store_shape = tuple(int(value) for value in store.array.shape)
+        if z0 < 0 or y0 < 0 or x0 < 0 or z1 > store_shape[0] or y1 > store_shape[1] or x1 > store_shape[2]:
+            raise ValueError(
+                f"Selected region z={z0}:{z1}, y={y0}:{y1}, x={x0}:{x1} is outside OME-Zarr shape {store_shape}."
+            )
+        expected_shape = (z1 - z0, y1 - y0, x1 - x0)
+        write_data = np.asarray(data)
+        if tuple(write_data.shape) != expected_shape:
+            raise ValueError(f"Selected data shape {tuple(write_data.shape)} does not match region {expected_shape}.")
+        store.array[z0:z1, y0:y1, x0:x1] = write_data.astype(store.array.dtype, copy=False)
+        self._pending_region_edits.pop(self._region_edit_key(layer, indexer), None)
+
+    def _ome_zarr_region_from_indexer(
+        self,
+        layer,
+        indexer: object,
+        scoped_data: np.ndarray,
+    ) -> tuple[tuple[int, int, int, int, int, int], np.ndarray]:
+        data_shape = getattr(layer.data, "shape", None)
+        if data_shape is None:
+            data_shape = np.asarray(layer.data).shape
+        shape = tuple(int(value) for value in data_shape)
+        if len(shape) != 3:
+            raise ValueError("OME-Zarr write-back requires a 3D z/y/x Labels layer. Use TIFF export for 2D masks.")
+        if indexer is Ellipsis:
+            return (0, shape[0], 0, shape[1], 0, shape[2]), np.asarray(scoped_data)
+        if not isinstance(indexer, tuple) or len(indexer) != 3:
+            raise ValueError("OME-Zarr write-back requires a z/y/x region selection.")
+
+        z_selector, y_selector, x_selector = indexer
+        z0, z1, z_reduced = self._selector_bounds(z_selector, shape[0], axis_name="z")
+        y0, y1, y_reduced = self._selector_bounds(y_selector, shape[1], axis_name="y")
+        x0, x1, x_reduced = self._selector_bounds(x_selector, shape[2], axis_name="x")
+        if y_reduced or x_reduced:
+            raise ValueError("OME-Zarr write-back requires slice selections for y and x.")
+        data = np.asarray(scoped_data)
+        if z_reduced:
+            if data.ndim != 2:
+                raise ValueError("Current-slice write-back expected a 2D scoped mask.")
+            data = data[np.newaxis, :, :]
+        return (z0, z1, y0, y1, x0, x1), data
+
+    def _selector_bounds(self, selector: object, size: int, *, axis_name: str) -> tuple[int, int, bool]:
+        if isinstance(selector, slice):
+            start, stop, step = selector.indices(size)
+            if step != 1:
+                raise ValueError(f"OME-Zarr write-back does not support stepped {axis_name} slices.")
+            return int(start), int(stop), False
+        if isinstance(selector, (int, np.integer)):
+            value = int(selector)
+            if value < 0:
+                value += int(size)
+            if value < 0 or value >= int(size):
+                raise ValueError(f"{axis_name} index {value} is outside axis length {size}.")
+            return value, value + 1, True
+        raise ValueError(f"OME-Zarr write-back does not support {axis_name} selector {selector!r}.")
+
     def _source_image_for_scoped_labels(self, label_layer, indexer: object) -> np.ndarray | None:
         image_layer = safe_get_layer(self.viewer, self.source_image_combo.currentData())
         if image_layer is None:
@@ -1967,7 +2256,6 @@ class MaskCleanupTab(QWidget):
         *,
         invalidate_fast_index: bool = True,
     ) -> bool:
-        current = np.asarray(layer.data)
         if indexer is Ellipsis:
             updated = np.asarray(scoped_data)
             return self._replace_layer_data(layer, updated, action, invalidate_fast_index=invalidate_fast_index)
@@ -1989,17 +2277,21 @@ class MaskCleanupTab(QWidget):
         *,
         invalidate_fast_index: bool = True,
     ) -> bool:
-        current = np.asarray(layer.data)
-        previous_region = np.asarray(current[indexer]).copy()
+        source = layer.data
+        previous_region = np.asarray(source[indexer]).copy()
         updated_region = np.asarray(scoped_data)
         if previous_region.shape == updated_region.shape and np.array_equal(previous_region, updated_region):
             return False
         self._append_region_undo_state(layer, indexer, previous_region, action)
         self._suppress_history_event = True
         try:
-            current[indexer] = updated_region
+            try:
+                source[indexer] = updated_region
+                self._pending_region_edits.pop(self._region_edit_key(layer, indexer), None)
+                self._last_layer_data[id(layer)] = self._snapshot_layer_data(layer)
+            except Exception:
+                self._pending_region_edits[self._region_edit_key(layer, indexer)] = updated_region.copy()
             layer.refresh()
-            self._last_layer_data[id(layer)] = self._snapshot_layer_data(layer)
         finally:
             self._suppress_history_event = False
         self._update_undo_state()
@@ -2017,16 +2309,17 @@ class MaskCleanupTab(QWidget):
             return 0
 
     def _scope_label(self, layer) -> str:
-        data = np.asarray(layer.data)
+        data = layer.data
+        shape = self._layer_shape(layer)
         region = self._work_region_label(data)
-        if data.ndim < 3:
+        if len(shape) < 3:
             return f"2D layer{region}"
         scope = self.scope_combo.currentData()
-        z_axis = data.ndim - 3
+        z_axis = len(shape) - 3
         if scope == "whole_volume":
             return f"whole volume{region}"
         if scope == "current_slice":
-            return f"Z={self._current_z(data, z_axis)}{region}"
+            return f"Z={self._current_z_shape(shape, z_axis)}{region}"
         z0 = min(int(self.z_start_spin.value()), int(self.z_end_spin.value()))
         z1 = max(int(self.z_start_spin.value()), int(self.z_end_spin.value()))
         return f"Z={z0}-{z1}{region}"
@@ -2203,9 +2496,8 @@ class MaskCleanupTab(QWidget):
             self._log(f"Component {component_id} is empty or no longer exists.")
             return
         bbox_start = np.asarray([lo for lo, _hi in record.bbox], dtype=float)
-        data_position = coords.mean(axis=0) + bbox_start
-        if self._last_analysis_offset is not None and len(self._last_analysis_offset) == len(data_position):
-            data_position = data_position + np.asarray(self._last_analysis_offset, dtype=float)
+        scoped_position = coords.mean(axis=0) + bbox_start
+        data_position = self._global_position_from_scoped_position(indexer, scoped_position, self._layer_shape(layer))
         label_value = self._label_value_near(layer, data_position)
         self._center_view_on_data_position(layer, data_position)
         detail = f" label {label_value}" if label_value > 0 else ""

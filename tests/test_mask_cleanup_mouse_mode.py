@@ -21,7 +21,7 @@ def test_context_menu_mouse_action_neutralizes_labels_paint_mode():
 def test_axon_context_menu_inserts_qaction_not_text():
     source = MASK_CLEANUP_SOURCE.read_text(encoding="utf-8")
     axon_block = source.split('if mode == "axon":', 1)[1].split(
-        "selected_action = menu.exec_",
+        "def handle_local_action",
         1,
     )[0]
 
@@ -41,6 +41,8 @@ def test_components_working_region_uses_roi_scoped_writeback():
     assert 'self.work_region_combo.addItem("Drawn ROI", "drawn")' in source
     assert "def _work_region_slices" in source
     assert "def _replace_layer_region_data" in source
+    assert "source[indexer] = updated_region" in source
+    assert "_pending_region_edits" in source
     assert "current.copy()" not in source.split("def _replace_scoped_layer_data", 1)[1].split(
         "def _current_z",
         1,

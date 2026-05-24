@@ -2,7 +2,7 @@
 
 ![napari-sam3-assistant UI](docs/ui.png)
 
-Latest version: `4.3.8`
+Latest version: `4.3.9`
 
 `napari-sam3-assistant` is a napari plugin for local Segment Anything Model 3
 (SAM3) segmentation. It provides:
@@ -32,6 +32,7 @@ corrected, saved, and exported.
   backend supports the workflow.
 - Save previews, clean connected components, relabel values, isolate overlapping
   candidates, merge labels/layers, inspect overlap, and export final masks.
+- In Mask Operations, edit bounded regions with `Mask Cleanup / Multiclass` and save the current working region back to OME-Zarr or out to TIFF.
 
 ## Documentation
 
@@ -170,7 +171,7 @@ Exemplar scan loop:
 
 Tiled exemplar scans are a search workflow, not an exact repeat of `Run Current ROI Only`. The current tiled scan uses one exemplar crop as a visual reference for each tile by composing an exemplar-plus-tile image, then writes the tile-side result back to the full canvas. Multiple boxes in the current ROI can help `Run Current ROI Only` when they overlap that ROI, but tiled scan currently uses the first collected exemplar crop as the default reference for all tiles.
 
-Huge Volume Phase 1 is available in Advanced Exemplar mode for 3D stacks. Enable `Enable large-image local inference`, check `Scan all Z slices to OME-Zarr`, then use `Scan Z Stack by Tiles`. This path writes tile labels directly to an OME-Zarr mask store and does not create a full in-memory volume. Seam merging, cross-Z object linking, resumable jobs, and Mask Operations write-back are planned later phases.
+Huge Volume Phase 1 is available in Advanced Exemplar mode for 3D stacks. Enable `Enable large-image local inference`, check `Scan all Z slices to OME-Zarr`, then use `Scan Z Stack by Tiles`. This path writes tile labels directly to an OME-Zarr mask store and does not create a full in-memory volume. To curate the result, drag/open the mask as a Labels layer, use `Mask Operations > Mask Cleanup / Multiclass` with Full mask, Manual ROI, or Drawn ROI, then use `Region Output` to write the current working region back to OME-Zarr or export it as TIFF. Seam merging, cross-Z object linking, and resumable jobs are planned later phases.
 
 Advanced mode also includes `Detection threshold`, with default `0.35`. Lower
 values accept weaker candidates and may add false positives. Higher values are

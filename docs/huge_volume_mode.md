@@ -19,7 +19,7 @@ Current limits:
   tiles lazily enough;
 - output is OME-Zarr only;
 - seam merging is skipped in this direct-write path;
-- Mask Operations chunk write-back is still a later phase;
+- Mask Operations supports manual bounded-region cleanup in `Mask Cleanup / Multiclass`, with `Region Output` for OME-Zarr write-back or TIFF region export; broader chunk cleanup automation is still a later phase;
 - object IDs are unique within each Z slice, not reconciled across Z yet.
 
 ## Target Data
@@ -55,8 +55,7 @@ For a `400 x 70000 x 40000` uint16 mask, a full in-memory array would be around
 8. The plugin creates an output `.ome.zarr` mask store and writes tile labels to
    `s0[z, y0:y1, x0:x1]`.
 
-Planned workflow extensions include selectable Z ranges, resumable jobs, and
-Mask Operations chunk/ROI write-back.
+For curation, drag/open the mask OME-Zarr as a Labels layer, then use `Mask Operations > Mask Cleanup / Multiclass`. Select the Operation scope and Working Region, clean or relabel that region, then use `Region Output` to write the same region back to OME-Zarr or export it as TIFF. Planned workflow extensions include selectable Z ranges, resumable jobs, and more automated chunk cleanup.
 
 ## Architecture Changes
 
@@ -196,9 +195,14 @@ Remaining Phase 1 hardening:
 
 ### Phase 2: Chunk Mask Operations
 
-- Add Mask Operations read/write-back for one chunk/ROI.
-- Add local component cleanup, relabeling, and export for selected chunks.
-- Add per-chunk undo and stale-analysis handling.
+- Added `Region Output` in `Mask Cleanup / Multiclass` for manual z/y/x OME-Zarr write-back and TIFF region export.
+- Reuses the existing Working Region controls, component table, cleanup actions, local edit tools, ROI-sized undo, and stale-analysis handling.
+
+Remaining Phase 2 hardening:
+
+- add shape/metadata guards for multi-resolution OME-Zarr variants;
+- add optional write-back to a chosen OME-Zarr array path beyond the default `s0`;
+- add batch chunk cleanup over many regions without loading a full mask.
 
 ### Phase 3: Advanced Volume Workflows
 
@@ -224,5 +228,5 @@ Current Phase 1 is acceptable when it can:
 - reopen the output mask and verify written chunks align with the source.
 
 The broader Huge Volume roadmap is complete only after resumable jobs, source
-inspection, Z range controls, chunk/ROI Mask Operations write-back, seam
+inspection, Z range controls, richer chunk/ROI Mask Operations tools, seam
 reconciliation, and cross-Z object linking are implemented.

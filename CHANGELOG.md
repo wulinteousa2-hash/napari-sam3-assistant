@@ -2,14 +2,21 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
-## 4.3.8
+## 4.3.9
 
 ### Added
+- Added `Region Output` to `Mask Cleanup / Multiclass` so the current Operation scope plus Working Region can be saved directly: OME-Zarr write-back updates the matching `s0[z, y, x]` region in-place, and TIFF export writes the selected 2D/3D region as BigTIFF.
+
 - Added Phase 1 Huge Volume Mode for Advanced Exemplar workflows: `Scan all Z slices to OME-Zarr` repeats tiled 2D exemplar scanning through each Z/frame slice and writes tile labels directly to an output OME-Zarr mask store.
 - Added a `huge_volume` mask store for region-based OME-Zarr label writes without creating a dense full-volume `Labels` array.
 
 ### Changed
-- Z-stack tiled scans currently skip seam merging, cross-Z object linking, resumable job metadata, and Mask Operations write-back; these remain later Huge Volume phases.
+- Z-stack tiled scans currently skip seam merging, cross-Z object linking, and resumable job metadata; these remain later Huge Volume phases.
+
+### Fixed
+- Fixed Mask Cleanup Operation scope display for `Current slice` and `Z range` so component table centroids and locate actions report global z/y/x coordinates instead of scoped local coordinates.
+- Fixed lazy OME-Zarr mask cleanup so scoped edits are sliced before NumPy conversion and `Save Working Region` writes pending ROI edits back to the selected OME-Zarr `s0` region.
+- Fixed canvas right-click cleanup menus by deferring the Qt context menu until after the napari/vispy mouse event, avoiding `EventEmitter loop detected` crashes.
 
 ## 4.3.6
 

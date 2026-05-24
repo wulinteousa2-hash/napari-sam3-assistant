@@ -14,6 +14,25 @@ class HugeVolumeMaskStore:
         self.array = array
 
     @classmethod
+    def open(cls, path: str | Path, array_path: str = "s0") -> "HugeVolumeMaskStore":
+        try:
+            import zarr
+        except Exception as exc:
+            raise RuntimeError("Huge-volume mask editing requires the 'zarr' package.") from exc
+
+        target = Path(path)
+        group = zarr.open_group(str(target), mode="r+")
+        try:
+            array = group[array_path]
+        except KeyError as exc:
+            raise ValueError(f"OME-Zarr mask array '{array_path}' was not found in {target}.") from exc
+        if len(tuple(array.shape)) != 3:
+            raise ValueError(
+                f"OME-Zarr mask write-back expects a 3D z/y/x mask array; got shape {tuple(array.shape)}."
+            )
+        return cls(target, array)
+
+    @classmethod
     def create(
         cls,
         path: str | Path,
