@@ -55,7 +55,7 @@ For a `400 x 70000 x 40000` uint16 mask, a full in-memory array would be around
 8. The plugin creates an output `.ome.zarr` mask store and writes tile labels to
    `s0[z, y0:y1, x0:x1]`.
 
-For curation, drag/open the mask OME-Zarr as a Labels layer, then use `Mask Operations > Mask Cleanup / Multiclass`. Select the Operation scope and Working Region, clean or relabel that region, then use `Region Output` to write the same region back to OME-Zarr or export it as TIFF. Planned workflow extensions include selectable Z ranges, resumable jobs, and more automated chunk cleanup.
+For curation, drag/open the mask OME-Zarr as a Labels layer, then use `Mask Operations > Mask Cleanup / Multiclass`. Select `Current slice` or a small `Z range`, choose `Manual ROI` or `Drawn ROI`, clean or relabel that bounded region, then use `Region Output` to write the same region back to OME-Zarr or export it as TIFF. Mask Cleanup blocks unsafe huge-volume choices such as `Whole volume` and unbounded `Full mask` on large/lazy targets. Planned workflow extensions include selectable Z ranges, resumable jobs, and more automated chunk cleanup.
 
 ## Architecture Changes
 

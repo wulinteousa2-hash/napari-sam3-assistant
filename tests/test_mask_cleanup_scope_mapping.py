@@ -100,3 +100,52 @@ def test_current_slice_scoped_data_slices_lazy_source_before_numpy_conversion():
     assert sub.shape == (100, 100)
     assert indexer == (2, slice(None), slice(None))
     assert offset == (0, 0)
+
+
+
+def test_huge_volume_guard_blocks_full_or_whole_volume_scope():
+    class Combo:
+        def __init__(self, value):
+            self.value = value
+
+        def currentData(self):
+            return self.value
+
+    tab = MaskCleanupTab.__new__(MaskCleanupTab)
+    layer = SimpleNamespace(data=SimpleNamespace(shape=(500, 2500, 2500)))
+    tab.scope_combo = Combo("current_slice")
+    tab.work_region_combo = Combo("full")
+
+    assert "Manual ROI" in tab._unsafe_huge_volume_scope_message(layer)
+
+    tab.scope_combo = Combo("whole_volume")
+    tab.work_region_combo = Combo("manual")
+    assert "Current slice" in tab._unsafe_huge_volume_scope_message(layer)
+
+
+def test_huge_volume_guard_allows_current_slice_manual_roi():
+    class Combo:
+        def __init__(self, value):
+            self.value = value
+
+        def currentData(self):
+            return self.value
+
+    class Spin:
+        def __init__(self, value):
+            self._value = value
+
+        def value(self):
+            return self._value
+
+    tab = MaskCleanupTab.__new__(MaskCleanupTab)
+    layer = SimpleNamespace(data=SimpleNamespace(shape=(500, 2500, 2500)))
+    tab.scope_combo = Combo("current_slice")
+    tab.work_region_combo = Combo("manual")
+    tab.work_y0_spin = Spin(0)
+    tab.work_y1_spin = Spin(256)
+    tab.work_x0_spin = Spin(640)
+    tab.work_x1_spin = Spin(896)
+
+    assert tab._unsafe_huge_volume_scope_message(layer) is None
+    assert tab._selected_scope_shape(layer) == (256, 256)

@@ -45,6 +45,8 @@ from ..widgets.collapsible_panel import CollapsiblePanel
 
 UNDO_HISTORY_LIMIT = 20
 UNDO_FULL_SNAPSHOT_PIXEL_LIMIT = 25_000_000
+HUGE_VOLUME_PIXEL_LIMIT = 100_000_000
+HUGE_VOLUME_SCOPED_PIXEL_LIMIT = 100_000_000
 
 
 class MaskCleanupTab(QWidget):
@@ -117,6 +119,7 @@ class MaskCleanupTab(QWidget):
                 self.work_roi_combo.setCurrentIndex(work_roi_index)
         self._sync_scope_controls()
         self._sync_work_region_controls()
+        self._sync_huge_volume_status()
         self.refresh_unique_values()
         self._track_target_layer()
         self._sync_mouse_action_callback()
@@ -146,7 +149,10 @@ class MaskCleanupTab(QWidget):
         if not path_text:
             self._log("Choose an output path for the working region.")
             return
-        sub, indexer, _offset = self._scoped_data(layer)
+        scoped = self._scoped_data_or_log(layer, "region save")
+        if scoped is None:
+            return
+        sub, indexer, _offset = scoped
         fmt = self.region_output_format_combo.currentData()
         if fmt == "tiff":
             try:
@@ -168,7 +174,11 @@ class MaskCleanupTab(QWidget):
         if layer is None:
             self._log("Select a target Labels layer for component analysis.")
             return
-        sub, indexer, offset = self._scoped_data(layer)
+        scoped = self._scoped_data_or_log(layer, "analysis")
+        if scoped is None:
+            self.component_table.set_records([])
+            return
+        sub, indexer, offset = scoped
         scope = self._scope_label(layer)
         self.status_label.setText(f"Analyzing {layer.name} ({scope})...")
         self.analysis_progress.setRange(0, 100)
@@ -205,7 +215,10 @@ class MaskCleanupTab(QWidget):
         if layer is None or not ids:
             self._log("Select component rows to delete.")
             return
-        sub, indexer, _offset = self._scoped_data(layer)
+        scoped = self._scoped_data_or_log(layer, "component edit")
+        if scoped is None:
+            return
+        sub, indexer, _offset = scoped
         fast_index = self._fresh_fast_index(layer, sub, indexer)
         if fast_index is None:
             self._log("Component index is stale or not built. Click Analyze Layer before deleting selected components.")
@@ -225,7 +238,10 @@ class MaskCleanupTab(QWidget):
             self._log("Select component rows to assign.")
             return
         new_value = int(self.assignment_value_spin.value())
-        sub, indexer, _offset = self._scoped_data(layer)
+        scoped = self._scoped_data_or_log(layer, "component edit")
+        if scoped is None:
+            return
+        sub, indexer, _offset = scoped
         fast_index = self._fresh_fast_index(layer, sub, indexer)
         if fast_index is None:
             self._log("Component index is stale or not built. Click Analyze Layer before assigning selected components.")
@@ -285,7 +301,10 @@ class MaskCleanupTab(QWidget):
         except ValueError as exc:
             self._log(str(exc))
             return
-        sub, indexer, _offset = self._scoped_data(layer)
+        scoped = self._scoped_data_or_log(layer, "relabel")
+        if scoped is None:
+            return
+        sub, indexer, _offset = scoped
         data, changed = self.cleanup.relabel_values(sub, source_values, self.new_value_spin.value())
         if changed and self._replace_scoped_layer_data(layer, data, indexer, "relabel values"):
             self._log(f"Relabeled {changed} pixel(s)/voxel(s) in {layer.name}.")
@@ -309,7 +328,10 @@ class MaskCleanupTab(QWidget):
         layer = self._target_layer()
         if layer is None:
             return
-        sub, indexer, _offset = self._scoped_data(layer)
+        scoped = self._scoped_data_or_log(layer, "delete values")
+        if scoped is None:
+            return
+        sub, indexer, _offset = scoped
         data, changed = self.cleanup.delete_values(sub, values)
         if changed and self._replace_scoped_layer_data(layer, data, indexer, "delete selected values"):
             self._log(f"Deleted label value(s) {values} from {layer.name} ({changed} pixel(s)/voxel(s)).")
@@ -326,7 +348,10 @@ class MaskCleanupTab(QWidget):
         layer = self._target_layer()
         if layer is None:
             return
-        sub, indexer, _offset = self._scoped_data(layer)
+        scoped = self._scoped_data_or_log(layer, "keep values")
+        if scoped is None:
+            return
+        sub, indexer, _offset = scoped
         data, changed = self.cleanup.keep_values(sub, values)
         if changed and self._replace_scoped_layer_data(layer, data, indexer, "keep selected values only"):
             self._log(f"Kept only label value(s) {values} in {layer.name}.")
@@ -340,7 +365,10 @@ class MaskCleanupTab(QWidget):
         if layer is None:
             self._log("Select a target Labels layer.")
             return
-        sub, indexer, _offset = self._scoped_data(layer)
+        scoped = self._scoped_data_or_log(layer, "convert non-zero")
+        if scoped is None:
+            return
+        sub, indexer, _offset = scoped
         data, changed = self.cleanup.convert_nonzero_to_value(sub, self.new_value_spin.value())
         if changed and self._replace_scoped_layer_data(layer, data, indexer, "convert non-zero to class"):
             self._log(f"Converted non-zero labels to class value {self.new_value_spin.value()} in {layer.name}.")
@@ -354,7 +382,10 @@ class MaskCleanupTab(QWidget):
         if layer is None:
             self._log("Select a target Labels layer.")
             return
-        sub, indexer, _offset = self._scoped_data(layer)
+        scoped = self._scoped_data_or_log(layer, "axon preview")
+        if scoped is None:
+            return
+        sub, indexer, _offset = scoped
         image = self._source_image_for_scoped_labels(layer, indexer)
         if image is None:
             self._log("Select a source image layer before batch axon preview.")
@@ -392,7 +423,10 @@ class MaskCleanupTab(QWidget):
         if layer is None:
             self._log("Select a target Labels layer.")
             return
-        sub, indexer, _offset = self._scoped_data(layer)
+        scoped = self._scoped_data_or_log(layer, "axon preview")
+        if scoped is None:
+            return
+        sub, indexer, _offset = scoped
         image = self._source_image_for_scoped_labels(layer, indexer)
         if image is None:
             self._log("Select a source image layer before creating myelin/axon layers.")
@@ -505,7 +539,10 @@ class MaskCleanupTab(QWidget):
         if not self._batch_axon_candidates:
             self._log("Run Preview Batch Axons before applying confident proposals.")
             return
-        sub, indexer, _offset = self._scoped_data(layer)
+        scoped = self._scoped_data_or_log(layer, action_name)
+        if scoped is None:
+            return
+        sub, indexer, _offset = scoped
         output_value = int(self.axon_value_spin.value()) if self.axon_assign_class_check.isChecked() else 0
         data, applied, changed = self.cleanup.apply_axon_hole_candidates(
             sub,
@@ -825,6 +862,9 @@ class MaskCleanupTab(QWidget):
         self.unique_values_table.setRowCount(0)
         if layer is None:
             return
+        if self._unsafe_huge_volume_scope_message(layer):
+            self._sync_huge_volume_status()
+            return
         sub, _indexer, _offset = self._scoped_data(layer)
         values, counts = np.unique(sub, return_counts=True)
         for value, count in zip(values, counts, strict=False):
@@ -959,7 +999,10 @@ class MaskCleanupTab(QWidget):
         if label_value <= 0:
             self.status_label.setText("Clicked background; no mask selected.")
             return None
-        sub, indexer, _offset = self._scoped_data(layer)
+        scoped = self._scoped_data_or_log(layer, "mouse action")
+        if scoped is None:
+            return None
+        sub, indexer, _offset = scoped
         scoped_coords = self._coords_to_scoped_coords(layer, coords, indexer)
         if scoped_coords is None:
             self.status_label.setText("Clicked mask is outside the selected operation scope.")
@@ -1098,7 +1141,10 @@ class MaskCleanupTab(QWidget):
             self._log("Clicked background; no mask action applied.")
             return
 
-        sub, indexer, _offset = self._scoped_data(layer)
+        scoped = self._scoped_data_or_log(layer, "mouse action")
+        if scoped is None:
+            return None
+        sub, indexer, _offset = scoped
         scoped_coords = self._coords_to_scoped_coords(layer, coords, indexer)
         if scoped_coords is None:
             self._log("Clicked mask is outside the selected operation scope.")
@@ -1398,26 +1444,26 @@ class MaskCleanupTab(QWidget):
             data_position = layer.world_to_data(position)
         except Exception:
             data_position = position
-        data = np.asarray(layer.data)
-        coords = tuple(int(round(float(value))) for value in data_position[-data.ndim :])
-        if len(coords) != data.ndim:
+        shape = self._layer_shape(layer)
+        coords = tuple(int(round(float(value))) for value in data_position[-len(shape) :])
+        if len(coords) != len(shape):
             return None
-        for coord, size in zip(coords, data.shape, strict=False):
+        for coord, size in zip(coords, shape, strict=False):
             if coord < 0 or coord >= size:
                 return None
         return coords
 
     def _label_value_at_coords(self, layer, coords: tuple[int, ...]) -> int:
-        data = np.asarray(layer.data)
-        if len(coords) != data.ndim:
+        shape = self._layer_shape(layer)
+        if len(coords) != len(shape):
             return 0
-        for coord, size in zip(coords, data.shape, strict=False):
+        for coord, size in zip(coords, shape, strict=False):
             if coord < 0 or coord >= size:
                 return 0
-        return int(data[coords])
+        return int(np.asarray(layer.data[coords]))
 
     def _coords_to_scoped_coords(self, layer, coords: tuple[int, ...], indexer: object) -> tuple[int, ...] | None:
-        data = np.asarray(layer.data)
+        shape = self._layer_shape(layer)
         if indexer is Ellipsis:
             return coords
         if not isinstance(indexer, tuple):
@@ -1427,12 +1473,12 @@ class MaskCleanupTab(QWidget):
             coord = coords[axis]
             if isinstance(selector, slice):
                 start = 0 if selector.start is None else int(selector.start)
-                stop = data.shape[axis] if selector.stop is None else int(selector.stop)
+                stop = shape[axis] if selector.stop is None else int(selector.stop)
                 if coord < start or coord >= stop:
                     return None
                 scoped.append(coord - start)
-            elif isinstance(selector, int):
-                if coord != selector:
+            elif isinstance(selector, (int, np.integer)):
+                if coord != int(selector):
                     return None
             else:
                 scoped.append(coord)
@@ -1470,7 +1516,7 @@ class MaskCleanupTab(QWidget):
         self.scope_combo = QComboBox()
         self.scope_combo.addItem("Current slice", "current_slice")
         self.scope_combo.addItem("Z range", "z_range")
-        self.scope_combo.addItem("Whole volume", "whole_volume")
+        self.scope_combo.addItem("Whole volume (unsafe for huge)", "whole_volume")
         self.scope_combo.currentIndexChanged.connect(self._on_scope_changed)
         self.z_start_spin = QSpinBox()
         self.z_end_spin = QSpinBox()
@@ -1518,6 +1564,9 @@ class MaskCleanupTab(QWidget):
         target_form.addRow("Operation scope", self.scope_combo)
         target_form.addRow("Z range", z_row)
         target_form.addRow(target_row)
+        self.huge_volume_status_label = QLabel("")
+        self.huge_volume_status_label.setWordWrap(True)
+        target_form.addRow("Huge-volume status", self.huge_volume_status_label)
         root.addLayout(target_form)
 
         self.cleanup_tabs = QTabWidget()
@@ -1546,7 +1595,7 @@ class MaskCleanupTab(QWidget):
         self.analysis_progress.setFormat("Component analysis idle")
         region_form = QFormLayout()
         self.work_region_combo = QComboBox()
-        self.work_region_combo.addItem("Full mask", "full")
+        self.work_region_combo.addItem("Full mask (unsafe for huge)", "full")
         self.work_region_combo.addItem("Manual ROI", "manual")
         self.work_region_combo.addItem("Drawn ROI", "drawn")
         self.work_region_combo.setToolTip(
@@ -1965,7 +2014,10 @@ class MaskCleanupTab(QWidget):
         if layer is None:
             self._log("Select a target Labels layer.")
             return
-        sub, indexer, _offset = self._scoped_data(layer)
+        scoped = self._scoped_data_or_log(layer, action)
+        if scoped is None:
+            return
+        sub, indexer, _offset = scoped
         data = callback(sub)
         if self._replace_scoped_layer_data(layer, data, indexer, action):
             self._log(f"{success_prefix} in {layer.name} ({self._scope_label(layer)}).")
@@ -1978,11 +2030,112 @@ class MaskCleanupTab(QWidget):
     def _target_layer(self):
         return safe_get_layer(self.viewer, self.target_combo.currentData())
 
+    def _scoped_data_or_log(self, layer, action: str) -> tuple[np.ndarray, object, tuple[int, ...]] | None:
+        message = self._unsafe_huge_volume_scope_message(layer)
+        if message:
+            full_message = f"Unsafe huge-volume {action} blocked. {message}"
+            self._log(full_message)
+            if hasattr(self, "status_label"):
+                self.status_label.setText(full_message)
+            self._sync_huge_volume_status()
+            return None
+        return self._scoped_data(layer)
+
+    def _sync_huge_volume_status(self) -> None:
+        if not hasattr(self, "huge_volume_status_label"):
+            return
+        layer = self._target_layer()
+        if layer is None:
+            self.huge_volume_status_label.setText("No Labels layer selected.")
+            return
+        shape = self._layer_shape(layer)
+        if not shape:
+            self.huge_volume_status_label.setText("Unable to inspect target shape.")
+            return
+        source_kind = self._layer_source_kind(layer)
+        total = self._shape_pixel_count(shape)
+        message = self._unsafe_huge_volume_scope_message(layer)
+        shape_text = " x ".join(str(value) for value in shape)
+        if message:
+            self.huge_volume_status_label.setText(
+                f"Huge/lazy target {shape_text} ({source_kind}). {message}"
+            )
+        elif self._is_huge_volume_layer(layer):
+            scoped_shape = self._selected_scope_shape(layer)
+            scoped_text = " x ".join(str(value) for value in scoped_shape) if scoped_shape else "selected region"
+            self.huge_volume_status_label.setText(
+                f"Huge-volume safe mode: target {shape_text} ({source_kind}); selected scope {scoped_text}."
+            )
+        else:
+            self.huge_volume_status_label.setText(f"Target {shape_text} ({source_kind}); normal in-memory operations allowed.")
+
+    def _unsafe_huge_volume_scope_message(self, layer) -> str | None:
+        if not self._is_huge_volume_layer(layer):
+            return None
+        shape = self._layer_shape(layer)
+        scope = self.scope_combo.currentData() if hasattr(self, "scope_combo") else "whole_volume"
+        region_mode = self.work_region_combo.currentData() if hasattr(self, "work_region_combo") else "full"
+        if len(shape) >= 3 and scope == "whole_volume":
+            return "Choose Current slice or a small Z range before analyzing or editing this large mask."
+        if region_mode == "full" or self._work_region_slices(layer.data) is None:
+            return "Choose Manual ROI or Drawn ROI so only a bounded XY region is loaded."
+        scoped_shape = self._selected_scope_shape(layer)
+        scoped_pixels = self._shape_pixel_count(scoped_shape)
+        if scoped_pixels > HUGE_VOLUME_SCOPED_PIXEL_LIMIT:
+            return (
+                f"Selected region has {scoped_pixels:,} pixels/voxels; reduce the Z range or ROI size "
+                f"below {HUGE_VOLUME_SCOPED_PIXEL_LIMIT:,}."
+            )
+        return None
+
+    def _is_huge_volume_layer(self, layer) -> bool:
+        shape = self._layer_shape(layer)
+        return self._shape_pixel_count(shape) > HUGE_VOLUME_PIXEL_LIMIT or self._is_lazy_layer_data(layer.data)
+
+    def _shape_pixel_count(self, shape: tuple[int, ...]) -> int:
+        total = 1
+        for value in shape:
+            total *= max(0, int(value))
+        return int(total)
+
+    def _is_lazy_layer_data(self, data) -> bool:
+        module = type(data).__module__.lower()
+        name = type(data).__name__.lower()
+        return any(token in module or token in name for token in ("zarr", "dask"))
+
+    def _layer_source_kind(self, layer) -> str:
+        data = layer.data
+        if self._is_lazy_layer_data(data):
+            return type(data).__name__
+        return f"{type(data).__name__}"
+
+    def _selected_scope_shape(self, layer) -> tuple[int, ...]:
+        shape = self._layer_shape(layer)
+        if not shape:
+            return ()
+        selected = list(shape)
+        if len(shape) >= 3:
+            z_axis = len(shape) - 3
+            scope = self.scope_combo.currentData() if hasattr(self, "scope_combo") else "whole_volume"
+            if scope == "current_slice":
+                selected.pop(z_axis)
+            elif scope == "z_range":
+                z0 = min(int(self.z_start_spin.value()), int(self.z_end_spin.value()))
+                z1 = max(int(self.z_start_spin.value()), int(self.z_end_spin.value()))
+                selected[z_axis] = max(0, z1 - z0 + 1)
+        region = self._work_region_slices(layer.data)
+        if region is not None and len(selected) >= 2:
+            y_slice, x_slice = region
+            selected[-2] = int(y_slice.stop) - int(y_slice.start)
+            selected[-1] = int(x_slice.stop) - int(x_slice.start)
+        return tuple(int(value) for value in selected)
+
     def _on_target_layer_changed(self, _index: int) -> None:
         self._invalidate_fast_index()
         self.component_table.set_records([])
         self._sync_scope_controls()
         self._sync_work_region_controls()
+        self._sync_huge_volume_status()
         self.refresh_unique_values()
         self._track_target_layer()
         self._sync_mouse_action_callback()
@@ -1991,11 +2144,13 @@ class MaskCleanupTab(QWidget):
     def _on_scope_changed(self, _index: int) -> None:
         self._invalidate_fast_index()
         self._sync_scope_controls()
+        self._sync_huge_volume_status()
         self.refresh_unique_values()
 
     def _on_work_region_changed(self, _index: int | None = None) -> None:
         self._invalidate_fast_index()
         self._sync_work_region_controls()
+        self._sync_huge_volume_status()
         self.component_table.set_records([])
         if hasattr(self, "status_label"):
             self.status_label.setText("Working region changed. Click Analyze Layer to rebuild the component table.")
@@ -2094,7 +2249,11 @@ class MaskCleanupTab(QWidget):
         return np.asarray(source[scoped_indexer]).copy(), scoped_indexer, scoped_offset
 
     def _work_region_slices(self, arr: np.ndarray) -> tuple[slice, slice] | None:
-        if arr.ndim < 2 or not hasattr(self, "work_region_combo"):
+        arr_shape = getattr(arr, "shape", None)
+        if arr_shape is None:
+            arr_shape = np.asarray(arr).shape
+        shape = tuple(int(value) for value in arr_shape)
+        if len(shape) < 2 or not hasattr(self, "work_region_combo"):
             return None
         mode = self.work_region_combo.currentData()
         if mode == "manual":
@@ -2109,7 +2268,7 @@ class MaskCleanupTab(QWidget):
             y0, x0, y1, x1 = bounds
         else:
             return None
-        height, width = int(arr.shape[-2]), int(arr.shape[-1])
+        height, width = int(shape[-2]), int(shape[-1])
         y0, y1 = sorted((max(0, min(height, y0)), max(0, min(height, y1))))
         x0, x1 = sorted((max(0, min(width, x0)), max(0, min(width, x1))))
         if y1 <= y0 or x1 <= x0:
@@ -2131,7 +2290,7 @@ class MaskCleanupTab(QWidget):
             points = np.asarray(vertices)
             if points.size == 0:
                 continue
-            coord_count = min(int(points.shape[-1]), arr.ndim)
+            coord_count = min(int(points.shape[-1]), len(shape))
             coords = points[..., -coord_count:]
             yx = coords[..., -2:]
             mins.append(np.floor(np.min(yx, axis=0)).astype(int))
@@ -2481,7 +2640,10 @@ class MaskCleanupTab(QWidget):
         if layer is None:
             self._log("Select a target Labels layer before locating a component.")
             return
-        sub, indexer, _offset = self._scoped_data(layer)
+        scoped = self._scoped_data_or_log(layer, "component edit")
+        if scoped is None:
+            return
+        sub, indexer, _offset = scoped
         fast_index = self._fresh_fast_index(layer, sub, indexer)
         if fast_index is None:
             self._log("Component index is stale or not built. Click Analyze Layer before locating components.")

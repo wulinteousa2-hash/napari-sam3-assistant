@@ -2,11 +2,13 @@ cff-version: 1.2.0
 message: "If you use napari-sam3-assistant in your work, please cite it using this metadata."
 type: software
 title: "napari-sam3-assistant"
-version: "4.3.3"
-date-released: "2026-05-16"
+version: "4.3.9"
+doi: "10.5281/zenodo.20367206"
+date-released: "2026-05-24"
 authors:
   - family-names: "Teo"
     given-names: "Wulin"
+    affiliation: "Houston Methodist Research Institute"
     orcid: "https://orcid.org/0000-0001-7815-7014"
 repository-code: "https://github.com/wulinteousa2-hash/napari-sam3-assistant"
 url: "https://github.com/wulinteousa2-hash/napari-sam3-assistant"

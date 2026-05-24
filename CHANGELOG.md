@@ -17,6 +17,7 @@ All notable changes to `napari-sam3-assistant` are documented here.
 - Fixed Mask Cleanup Operation scope display for `Current slice` and `Z range` so component table centroids and locate actions report global z/y/x coordinates instead of scoped local coordinates.
 - Fixed lazy OME-Zarr mask cleanup so scoped edits are sliced before NumPy conversion and `Save Working Region` writes pending ROI edits back to the selected OME-Zarr `s0` region.
 - Fixed canvas right-click cleanup menus by deferring the Qt context menu until after the napari/vispy mouse event, avoiding `EventEmitter loop detected` crashes.
+- Added huge-volume unsafe-operation guards in Mask Cleanup: large/lazy 3D masks now block `Whole volume` and unbounded `Full mask` analysis/edit/save paths and guide users toward `Current slice` or `Z range` plus `Manual ROI`/`Drawn ROI`.
 
 ## 4.3.6
 

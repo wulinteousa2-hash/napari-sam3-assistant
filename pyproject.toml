@@ -38,6 +38,7 @@ classifiers = [
 Homepage = "https://github.com/wulinteousa2-hash/napari-sam3-assistant"
 Repository = "https://github.com/wulinteousa2-hash/napari-sam3-assistant"
 Issues = "https://github.com/wulinteousa2-hash/napari-sam3-assistant/issues"
+DOI = "https://doi.org/10.5281/zenodo.20367206"
 
 [project.entry-points."napari.manifest"]
 napari-sam3-assistant = "napari_sam3_assistant:napari.yaml"
