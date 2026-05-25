@@ -8,7 +8,9 @@ import time
 from typing import Any
 
 import numpy as np
+from PIL import Image as PILImage
 from scipy import ndimage as ndi
+import tifffile
 from napari import current_viewer
 from napari.layers import Image, Labels, Points, Shapes
 from napari.qt.threading import thread_worker
@@ -736,12 +738,11 @@ class AdvancedModePanel(QWidget):
             "Each image gets its own SAM3 preview output layers."
         )
 
-        self.large_image_check = QCheckBox("Enable large-image local inference")
+        self.large_image_check = QCheckBox("Enable tiled inference")
         self.large_image_check.setChecked(False)
         self.large_image_check.setToolTip(
-            "When enabled, SAM3 runs only on a local XY ROI around point/box prompts "
-            "and writes the result back into global image coordinates. For 3D/video, "
-            "the same fixed XY ROI is used across all frames."
+            "Process images tile by tile using the current prompt. Use Run Current ROI Only "
+            "to test the exemplar locally, then scan the target image or a folder with the same tile settings."
         )
         self.large_image_check.toggled.connect(self._on_large_image_mode_changed)
 
@@ -780,7 +781,16 @@ class AdvancedModePanel(QWidget):
             "Huge-volume mode for 3D stacks: repeat the tiled exemplar scan for "
             "each Z/frame slice and write mask chunks directly to an OME-Zarr store."
         )
-        self.z_stack_tiled_scan_check.toggled.connect(self._sync_run_controls)
+        self.z_stack_tiled_scan_check.toggled.connect(self._on_z_stack_tiled_scan_changed)
+
+        self.folder_batch_check = QCheckBox("Run folder batch")
+        self.folder_batch_check.setChecked(False)
+        self.folder_batch_check.setEnabled(False)
+        self.folder_batch_check.setToolTip(
+            "After testing the current exemplar in the viewer, apply the same exemplar "
+            "to image files from a folder and write masks to disk."
+        )
+        self.folder_batch_check.toggled.connect(self._on_folder_batch_changed)
 
         self.exemplar_source_combo = QComboBox()
         self.exemplar_source_combo.addItem("Use box from target image", "target")
@@ -839,6 +849,7 @@ class AdvancedModePanel(QWidget):
         task_layout.addRow("Tile overlap", self.tile_overlap_spin)
         task_layout.addRow("", self.merge_tile_seams_check)
         task_layout.addRow("", self.z_stack_tiled_scan_check)
+        task_layout.addRow("", self.folder_batch_check)
         task_layout.addRow("Exemplar source", self.exemplar_source_combo)
         task_layout.addRow("Exemplar crop image", self.exemplar_crop_layer_combo)
         task_layout.addRow("Crop region", self.exemplar_crop_region_combo)
@@ -1031,9 +1042,63 @@ class AdvancedModePanel(QWidget):
 
         layout.addWidget(self.live_refinement_status_label)
         layout.addLayout(row)
+        layout.addWidget(self._build_folder_batch_group())
         layout.addWidget(self._build_preview_output_group())
         group.setLayout(layout)
         return group
+
+    def _build_folder_batch_group(self) -> QFrame:
+        frame = QFrame()
+        self.folder_batch_panel = frame
+        frame.setObjectName("folderBatchPanel")
+        layout = QFormLayout()
+        layout.setContentsMargins(0, 6, 0, 0)
+
+        self.folder_batch_input_edit = QLineEdit()
+        self.folder_batch_input_edit.setPlaceholderText("Choose input image folder")
+        self.folder_batch_input_edit.setMinimumWidth(0)
+        self.folder_batch_input_edit.setMaximumWidth(260)
+        self.folder_batch_input_edit.editingFinished.connect(self._save_settings)
+        self.folder_batch_input_btn = QPushButton("Choose")
+        self.folder_batch_input_btn.clicked.connect(self._browse_folder_batch_input)
+        input_row = QHBoxLayout()
+        input_row.addWidget(self.folder_batch_input_edit)
+        input_row.addWidget(self.folder_batch_input_btn)
+
+        self.folder_batch_output_edit = QLineEdit()
+        self.folder_batch_output_edit.setPlaceholderText("Choose output mask folder")
+        self.folder_batch_output_edit.setMinimumWidth(0)
+        self.folder_batch_output_edit.setMaximumWidth(260)
+        self.folder_batch_output_edit.editingFinished.connect(self._save_settings)
+        self.folder_batch_output_btn = QPushButton("Choose")
+        self.folder_batch_output_btn.clicked.connect(self._browse_folder_batch_output)
+        output_row = QHBoxLayout()
+        output_row.addWidget(self.folder_batch_output_edit)
+        output_row.addWidget(self.folder_batch_output_btn)
+
+        self.folder_batch_format_combo = QComboBox()
+        self.folder_batch_format_combo.addItems(["OME-Zarr", "TIFF"])
+        self.folder_batch_format_combo.setMaximumWidth(160)
+        self.folder_batch_format_combo.currentTextChanged.connect(lambda _text: self._save_settings())
+
+        self.folder_batch_status_label = QLabel(
+            "Folder batch writes masks to disk and does not load full batch results into the viewer."
+        )
+        self.folder_batch_status_label.setWordWrap(True)
+        self.folder_batch_status_label.setStyleSheet("color: #9aa7b6; font-size: 11px;")
+
+        self.folder_batch_input_row = input_row
+        self.folder_batch_output_row = output_row
+        layout.addRow("Input folder", self.folder_batch_input_row)
+        layout.addRow("Output folder", self.folder_batch_output_row)
+        layout.addRow("Output format", self.folder_batch_format_combo)
+        layout.addRow("", self.folder_batch_status_label)
+        self.folder_batch_input_label = layout.labelForField(self.folder_batch_input_row)
+        self.folder_batch_output_label = layout.labelForField(self.folder_batch_output_row)
+        self.folder_batch_format_label = layout.labelForField(self.folder_batch_format_combo)
+        frame.setLayout(layout)
+        frame.setVisible(False)
+        return frame
 
     def _build_preview_output_group(self) -> QFrame:
         frame = QFrame()
@@ -1167,6 +1232,28 @@ class AdvancedModePanel(QWidget):
             self.preview_output_folder_edit.setText(selected)
             self._save_settings()
             self._update_preview_output_filename()
+
+    def _browse_folder_batch_input(self) -> None:
+        current = self.folder_batch_input_edit.text().strip() if hasattr(self, "folder_batch_input_edit") else ""
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "Select folder batch input folder",
+            current or str(Path.home()),
+        )
+        if selected:
+            self.folder_batch_input_edit.setText(selected)
+            self._save_settings()
+
+    def _browse_folder_batch_output(self) -> None:
+        current = self.folder_batch_output_edit.text().strip() if hasattr(self, "folder_batch_output_edit") else ""
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "Select folder batch output folder",
+            current or str(Path.home()),
+        )
+        if selected:
+            self.folder_batch_output_edit.setText(selected)
+            self._save_settings()
 
     def _on_preview_output_format_changed(self, _text: str) -> None:
         self._save_settings()
@@ -1302,6 +1389,22 @@ class AdvancedModePanel(QWidget):
         self._sync_task_setup_visibility()
         self._sync_run_controls()
 
+    def _on_folder_batch_changed(self, checked: bool) -> None:
+        if checked and hasattr(self, "z_stack_tiled_scan_check"):
+            old = self.z_stack_tiled_scan_check.blockSignals(True)
+            self.z_stack_tiled_scan_check.setChecked(False)
+            self.z_stack_tiled_scan_check.blockSignals(old)
+        self._sync_task_setup_visibility()
+        self._sync_run_controls()
+
+    def _on_z_stack_tiled_scan_changed(self, checked: bool) -> None:
+        if checked and hasattr(self, "folder_batch_check"):
+            old = self.folder_batch_check.blockSignals(True)
+            self.folder_batch_check.setChecked(False)
+            self.folder_batch_check.blockSignals(old)
+        self._sync_task_setup_visibility()
+        self._sync_run_controls()
+
     def _sync_task_setup_visibility(self) -> None:
         if not hasattr(self, "roi_size_combo") or not hasattr(self, "propagation_direction_combo"):
             return
@@ -1317,10 +1420,13 @@ class AdvancedModePanel(QWidget):
             self.tile_overlap_spin.setVisible(large_image_enabled)
         if hasattr(self, "merge_tile_seams_check"):
             self.merge_tile_seams_check.setEnabled(large_image_enabled)
-            self.merge_tile_seams_check.setVisible(large_image_enabled)
+            self.merge_tile_seams_check.setVisible(False)
         if hasattr(self, "z_stack_tiled_scan_check"):
-            self.z_stack_tiled_scan_check.setEnabled(large_image_enabled and is_exemplar)
+            self.z_stack_tiled_scan_check.setEnabled(large_image_enabled and is_exemplar and not self._folder_batch_enabled())
             self.z_stack_tiled_scan_check.setVisible(large_image_enabled and is_exemplar)
+        if hasattr(self, "folder_batch_check"):
+            self.folder_batch_check.setEnabled(large_image_enabled and is_exemplar and not self._z_stack_tiled_scan_enabled())
+            self.folder_batch_check.setVisible(large_image_enabled and is_exemplar)
         if hasattr(self, "_roi_size_row_label") and self._roi_size_row_label is not None:
             self._roi_size_row_label.setVisible(large_image_enabled)
         if hasattr(self, "_tile_overlap_row_label") and self._tile_overlap_row_label is not None:
@@ -1392,7 +1498,12 @@ class AdvancedModePanel(QWidget):
                 and self._current_task() == Sam3Task.EXEMPLAR
                 and self._large_image_mode_enabled()
             )
-            if self._z_stack_tiled_scan_enabled():
+            if self._folder_batch_enabled():
+                self.batch_local_exemplar_btn.setText("Run Folder Batch")
+                self.batch_local_exemplar_btn.setToolTip(
+                    "Apply the current exemplar to files in the input folder and write masks to disk."
+                )
+            elif self._z_stack_tiled_scan_enabled():
                 self.batch_local_exemplar_btn.setText("Scan Z Stack by Tiles")
                 self.batch_local_exemplar_btn.setToolTip(
                     "Repeat tiled exemplar scanning through all Z/frame slices and write "
@@ -1414,7 +1525,29 @@ class AdvancedModePanel(QWidget):
                 self._current_task() == Sam3Task.EXEMPLAR and self._large_image_mode_enabled()
             )
             self.batch_local_exemplar_btn.setEnabled(enabled)
+        self._sync_folder_batch_controls()
         self._sync_preview_output_controls()
+
+    def _sync_folder_batch_controls(self) -> None:
+        if not hasattr(self, "folder_batch_panel"):
+            return
+        visible = self._folder_batch_enabled() and self._current_task() == Sam3Task.EXEMPLAR and self._large_image_mode_enabled()
+        self.folder_batch_panel.setVisible(visible)
+        for widget in (
+            self.folder_batch_input_edit,
+            self.folder_batch_input_btn,
+            self.folder_batch_output_edit,
+            self.folder_batch_output_btn,
+            self.folder_batch_format_combo,
+        ):
+            widget.setEnabled(visible and self._worker is None)
+        for label in (
+            self.folder_batch_input_label,
+            self.folder_batch_output_label,
+            self.folder_batch_format_label,
+        ):
+            if label is not None:
+                label.setVisible(visible)
 
 
     def _sync_model_type_controls(self) -> None:
@@ -1642,11 +1775,11 @@ class AdvancedModePanel(QWidget):
         )
         if self._large_image_mode_enabled():
             self._log(
-                f"Large-image mode ON: local ROI inference for {len(local_jobs)} "
+                f"Tiled inference ON: local ROI inference for {len(local_jobs)} "
                 "anchored batch job(s); jobs without point/box anchors use full-image inference."
             )
         else:
-            self._log("Large-image mode OFF: full-image inference.")
+            self._log("Tiled inference OFF: full-image inference.")
 
     def _run_image_task(self, bundle: PromptBundle) -> None:
         if self.viewer is None or self.layer_writer is None:
@@ -1663,7 +1796,7 @@ class AdvancedModePanel(QWidget):
                 self._run_large_image_task(bundle, anchor)
                 return
             self._log(
-                "Large-image mode ON, but no point or box ROI anchor was found. "
+                "Tiled inference is on, but no point or box ROI anchor was found. "
                 "Using full-image inference for this task."
             )
         image_layer = self.viewer.layers[bundle.image.layer_name]
@@ -1689,9 +1822,9 @@ class AdvancedModePanel(QWidget):
         self._start_worker(worker)
         self._log(f"Running {bundle.task.value} on image layer '{bundle.image.layer_name}'.")
         if self._large_image_mode_enabled():
-            self._log("Large-image mode OFF for this run: no local ROI anchor available.")
+            self._log("Tiled inference OFF for this run: no local ROI anchor available.")
         else:
-            self._log("Large-image mode OFF: full-image inference.")
+            self._log("Tiled inference OFF: full-image inference.")
 
     def _run_large_image_task(self, bundle: PromptBundle, anchor: tuple[float, float]) -> None:
         if self.viewer is None or self.layer_writer is None:
@@ -1744,7 +1877,7 @@ class AdvancedModePanel(QWidget):
         worker.returned.connect(self._write_image_result)
         self._start_worker(worker)
         self._log(
-            f"Large-image mode ON: local ROI inference ({bounds.width} x {bounds.height}); "
+            f"Tiled inference ON: local ROI inference ({bounds.width} x {bounds.height}); "
             f"ROI y={bounds.y0}:{bounds.y1}, x={bounds.x0}:{bounds.x1}."
         )
 
@@ -1759,8 +1892,11 @@ class AdvancedModePanel(QWidget):
             self.activity_status.set_ready()
             return
         if not self._large_image_mode_enabled():
-            self._log("Enable large-image local inference before scanning the full image by tiles.")
+            self._log("Enable tiled inference before scanning the image by tiles.")
             self.activity_status.set_ready()
+            return
+        if self._folder_batch_enabled():
+            self._run_folder_batch_exemplar_task()
             return
         if self._z_stack_tiled_scan_enabled():
             self._run_z_stack_tiled_exemplar_task()
@@ -1954,6 +2090,214 @@ class AdvancedModePanel(QWidget):
                 f"Using crop layer '{exemplar_source_name}' as exemplar source and scanning "
                 f"{len(jobs)} target image layer(s) by tiles."
             )
+
+    def _folder_batch_enabled(self) -> bool:
+        return bool(
+            hasattr(self, "folder_batch_check")
+            and self.folder_batch_check.isChecked()
+        )
+
+    def _run_folder_batch_exemplar_task(self) -> None:
+        input_text = self.folder_batch_input_edit.text().strip() if hasattr(self, "folder_batch_input_edit") else ""
+        output_text = self.folder_batch_output_edit.text().strip() if hasattr(self, "folder_batch_output_edit") else ""
+        if not input_text:
+            self._log("Choose an input folder before running folder batch.")
+            self.activity_status.set_ready()
+            return
+        if not output_text:
+            self._log("Choose an output folder before running folder batch.")
+            self.activity_status.set_ready()
+            return
+        input_dir = Path(input_text).expanduser()
+        output_dir = Path(output_text).expanduser()
+        if not input_dir.exists() or not input_dir.is_dir():
+            self._log(f"Folder batch input does not exist or is not a folder: {input_dir}")
+            self.activity_status.set_ready()
+            return
+        image_files = self._folder_batch_candidate_files(input_dir)
+        if not image_files:
+            self._log(f"No candidate image files found in folder batch input: {input_dir}")
+            self.activity_status.set_ready()
+            return
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self._log(f"Cannot create folder batch output folder: {exc}")
+            self.activity_status.set_ready()
+            return
+
+        roi_hw = self._selected_roi_size()
+        overlap_fraction = float(self.tile_overlap_spin.value()) / 100.0
+        output_format = self.folder_batch_format_combo.currentText()
+        try:
+            reference_bundle = self._collect_bundle_for_tiled_exemplar()
+            if self._external_exemplar_source_enabled():
+                exemplar, exemplar_source_name = self._collect_external_exemplar_patch()
+            else:
+                exemplar, exemplar_source_name = self._collect_tiled_exemplar_patch(reference_bundle)
+            cpu_error = self._cpu_bundle_support_error(reference_bundle)
+            if cpu_error:
+                raise RuntimeError(cpu_error)
+            adapter = self._ensure_adapter()
+        except Exception as exc:
+            self._log(f"Cannot collect folder batch inputs: {exc}")
+            self.activity_status.set_ready()
+            return
+
+        self._clear_results_table()
+
+        @thread_worker
+        def run_folder_batch():
+            self._ensure_image_adapter_loaded_for_bundle(adapter, reference_bundle)
+            total_files = len(image_files)
+            written_paths: list[str] = []
+            for file_index, image_path in enumerate(image_files, start=1):
+                yield f"Folder batch file {file_index}/{total_files}: {image_path.name}"
+                image = self._read_folder_batch_image(image_path)
+                output_path = self._folder_batch_output_path(output_dir, image_path, output_format)
+                if output_path.exists():
+                    raise RuntimeError(f"Output already exists: {output_path}")
+                labels = self._segment_folder_batch_image(
+                    image,
+                    reference_bundle,
+                    np.asarray(exemplar),
+                    adapter,
+                    roi_hw,
+                    overlap_fraction,
+                    image_path.name,
+                )
+                exported = self.mask_export_service.export(labels, output_path, output_format)
+                written_paths.append(str(exported))
+                yield f"Folder batch wrote {exported}"
+            yield {"file_count": total_files, "written_paths": written_paths}
+
+        def handle_folder_batch_output(payload: object) -> None:
+            if isinstance(payload, str):
+                self._log(payload)
+                return
+            if isinstance(payload, dict):
+                paths = [Path(value) for value in payload.get("written_paths", [])]
+                if paths:
+                    self._last_quick_mask_path = paths[-1]
+                self._log(
+                    f"Folder batch complete: {int(payload.get('file_count', 0))} file(s) processed. "
+                    f"Output folder: {output_dir}."
+                )
+                self._log("Drag output masks or OME-Zarr labels into napari to review batch quality.")
+
+        worker = run_folder_batch()
+        worker.yielded.connect(handle_folder_batch_output)
+        self._start_worker(
+            worker,
+            activity_status="Folder batch running...",
+        )
+        self._log(
+            f"Started folder batch: {len(image_files)} file(s), tile size {roi_hw[1]} x {roi_hw[0]}, "
+            f"overlap {self.tile_overlap_spin.value()}%, output {output_dir}, format {output_format}."
+        )
+        self._log(f"Using exemplar source '{exemplar_source_name}'.")
+
+    def _folder_batch_candidate_files(self, folder: Path) -> list[Path]:
+        suffixes = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp"}
+        return sorted(path for path in folder.rglob("*") if path.is_file() and path.suffix.lower() in suffixes)
+
+    def _read_folder_batch_image(self, path: Path) -> np.ndarray:
+        suffix = path.suffix.lower()
+        if suffix in {".tif", ".tiff"}:
+            return np.asarray(tifffile.imread(path))
+        with PILImage.open(path) as image:
+            return np.asarray(image)
+
+    def _folder_batch_output_path(self, output_dir: Path, input_path: Path, output_format: str) -> Path:
+        stem = f"{self._safe_file_stem(input_path.stem)}_mask"
+        return output_dir / self._filename_for_format(stem, output_format)
+
+    def _segment_folder_batch_image(
+        self,
+        image: np.ndarray,
+        reference_bundle: PromptBundle,
+        exemplar: np.ndarray,
+        adapter: Sam3Adapter,
+        roi_hw: tuple[int, int],
+        overlap_fraction: float,
+        source_name: str,
+    ) -> np.ndarray:
+        arr = np.asarray(image)
+        if arr.ndim < 2:
+            raise RuntimeError(f"Folder batch image '{source_name}' has fewer than two dimensions.")
+        if arr.ndim == 2 or (arr.ndim == 3 and arr.shape[-1] in (1, 3, 4)):
+            return self._segment_folder_batch_plane(
+                arr,
+                reference_bundle,
+                exemplar,
+                adapter,
+                roi_hw,
+                overlap_fraction,
+                source_name,
+                z_index=None,
+            )
+        if arr.ndim == 3:
+            stack = np.zeros(tuple(int(value) for value in arr.shape), dtype=np.uint32)
+            for z_index in range(int(arr.shape[0])):
+                stack[z_index] = self._segment_folder_batch_plane(
+                    np.asarray(arr[z_index]),
+                    reference_bundle,
+                    exemplar,
+                    adapter,
+                    roi_hw,
+                    overlap_fraction,
+                    source_name,
+                    z_index=z_index,
+                )
+            return stack
+        raise RuntimeError(
+            f"Folder batch image '{source_name}' has unsupported shape {arr.shape}. "
+            "Use 2D images, RGB/RGBA images, or ZYX TIFF stacks."
+        )
+
+    def _segment_folder_batch_plane(
+        self,
+        plane: np.ndarray,
+        reference_bundle: PromptBundle,
+        exemplar: np.ndarray,
+        adapter: Sam3Adapter,
+        roi_hw: tuple[int, int],
+        overlap_fraction: float,
+        source_name: str,
+        *,
+        z_index: int | None,
+    ) -> np.ndarray:
+        image_hw = (int(plane.shape[0]), int(plane.shape[1]))
+        exemplar_hw = tuple(int(value) for value in np.asarray(exemplar).shape[:2])
+        if exemplar_hw[0] > roi_hw[0] or exemplar_hw[1] > roi_hw[1]:
+            raise RuntimeError("The exemplar crop is larger than the tile size. Select a smaller crop or increase ROI size.")
+        tiles = self._tile_bounds_for_image(image_hw, roi_hw, overlap_fraction)
+        composed = np.zeros(image_hw, dtype=np.uint32)
+        next_object_id = 1
+        for _tile_index, bounds in enumerate(tiles, start=1):
+            tile = np.asarray(plane[bounds.y0 : bounds.y1, bounds.x0 : bounds.x1, ...])
+            augmented, tile_origin, exemplar_box = self._augmented_exemplar_tile(tile, exemplar)
+            tile_bundle = self._bundle_for_augmented_exemplar(reference_bundle, augmented, exemplar_box)
+            result = adapter.run_image(
+                augmented,
+                tile_bundle,
+                cache_context={"image_layer": source_name, "roi": (bounds.y0, bounds.x0, bounds.y1, bounds.x1)},
+            )
+            local_labels = self._result_labels_for_tile(
+                result,
+                augmented.shape,
+                tile_origin,
+                (bounds.height, bounds.width),
+            )
+            next_object_id = self._compose_tile_labels(composed, local_labels, bounds, next_object_id)
+        if self.merge_tile_seams_check.isChecked():
+            composed, _count = self._merge_tile_seam_labels(
+                composed,
+                tiles,
+                dilation_px=2,
+                min_contact_pixels=8,
+            )
+        return composed
 
     def _z_stack_tiled_scan_enabled(self) -> bool:
         return bool(
@@ -2542,7 +2886,7 @@ class AdvancedModePanel(QWidget):
         anchor = roi_anchor_from_bundle(bundle)
         if anchor is None:
             self._log(
-                "Large-image mode ON, but no point or box ROI anchor was found. "
+                "Tiled inference is on, but no point or box ROI anchor was found. "
                 "Using full-stack 3D/video propagation."
             )
             return None
@@ -2939,11 +3283,11 @@ class AdvancedModePanel(QWidget):
         self._sync_run_controls()
         if enabled:
             width, height = self._selected_roi_size()
-            self._log(f"Large-image mode ON: local ROI inference ({width} x {height}).")
+            self._log(f"Tiled inference ON: local ROI inference ({width} x {height}).")
         else:
             self._active_rois.clear()
             self._clear_active_roi_overlay()
-            self._log("Large-image mode OFF: full-image inference.")
+            self._log("Tiled inference OFF: full-image inference.")
 
     def _on_exemplar_source_changed(self, *_args: Any) -> None:
         self._sync_task_setup_visibility()
@@ -3278,6 +3622,15 @@ class AdvancedModePanel(QWidget):
             index = self.preview_output_format_combo.findText(output_format)
             if index >= 0:
                 self.preview_output_format_combo.setCurrentIndex(index)
+        if hasattr(self, "folder_batch_input_edit"):
+            self.folder_batch_input_edit.setText(self.settings.value("folder_batch_input_dir", "", type=str) or "")
+        if hasattr(self, "folder_batch_output_edit"):
+            self.folder_batch_output_edit.setText(self.settings.value("folder_batch_output_dir", "", type=str) or "")
+        if hasattr(self, "folder_batch_format_combo"):
+            folder_batch_format = self.settings.value("folder_batch_output_format", "OME-Zarr", type=str)
+            index = self.folder_batch_format_combo.findText(folder_batch_format)
+            if index >= 0:
+                self.folder_batch_format_combo.setCurrentIndex(index)
 
         if (
             self._current_model_type() == "sam3.1"
@@ -3298,6 +3651,12 @@ class AdvancedModePanel(QWidget):
             self.settings.setValue("quick_mask_output_dir", self.preview_output_folder_edit.text().strip())
         if hasattr(self, "preview_output_format_combo"):
             self.settings.setValue("quick_mask_output_format", self.preview_output_format_combo.currentText())
+        if hasattr(self, "folder_batch_input_edit"):
+            self.settings.setValue("folder_batch_input_dir", self.folder_batch_input_edit.text().strip())
+        if hasattr(self, "folder_batch_output_edit"):
+            self.settings.setValue("folder_batch_output_dir", self.folder_batch_output_edit.text().strip())
+        if hasattr(self, "folder_batch_format_combo"):
+            self.settings.setValue("folder_batch_output_format", self.folder_batch_format_combo.currentText())
         if hasattr(self, "sam31_diagnostics_check"):
             self.settings.setValue("sam31_diagnostics", self.sam31_diagnostics_check.isChecked())
 

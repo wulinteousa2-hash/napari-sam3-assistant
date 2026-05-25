@@ -2,6 +2,20 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.4.0
+
+### Added
+- Added experimental Advanced Exemplar folder batch inference: users can test an exemplar on a loaded viewer image, enable tiled inference, choose `Run folder batch`, and apply the same exemplar to image files in an input folder while writing TIFF or OME-Zarr masks to disk.
+- Added Step 4 folder batch controls for input folder, output folder, output format, progress logging, and output naming that preserves each input stem with a `_mask` suffix.
+
+### Changed
+- Renamed Advanced `Enable large-image local inference` to `Enable tiled inference` so the same tile-size and overlap controls cover local ROI tests, full target-image scans, Z-stack scans, and folder batch.
+- Kept seam merging enabled internally for tiled scans while hiding the seam-merge checkbox from the main UI.
+
+### Experimental limits
+- Folder batch input currently supports common 2D image files and TIFF stacks (`.tif`, `.tiff`, `.png`, `.jpg`, `.jpeg`, `.bmp`); OME-Zarr and ND2 input are not wired yet.
+- Folder batch output writes one TIFF or OME-Zarr mask per input file and does not overwrite existing outputs, mirror nested input folders, resume partial jobs, or stream truly huge full-image masks chunk-by-chunk yet.
+
 ## 4.3.10
 
 ### Fixed

@@ -7,7 +7,7 @@ Plugins > SAM3 Assistant
 ```
 
 Use `Simple` first unless you specifically need advanced setup, batch work,
-large-image ROI controls, detailed result tables, or SAM3.1 video-model
+tiled ROI controls, detailed result tables, or SAM3.1 video-model
 selection.
 
 ## Simple Mode
@@ -218,13 +218,14 @@ In Simple mode, the `Exemplar` tab can also use `Use crop image`. Select a crop
 image and crop region when the exemplar is already available as a small image
 layer instead of a box drawn on the target.
 
-## Large-Image Local Inference
+## Tiled Inference
 
-Large-image local inference is optional and off by default. It is useful for
-OME-Zarr, large TIFF, and other data where full-plane inference is too expensive.
+Tiled inference is optional and off by default. It is useful for OME-Zarr,
+large TIFF, folder batch, and other data where full-plane inference is too
+expensive.
 
 1. Set up a normal 2D task.
-2. Enable `Enable large-image local inference` in Advanced mode.
+2. Enable `Enable tiled inference` in Advanced mode.
 3. Choose a local ROI size such as `1024 x 1024` or `2048 x 2048`.
 4. Add a point or box prompt.
 5. Click `Run Preview`.
@@ -254,7 +255,7 @@ Use `Scan Full Image by Tiles` when an exemplar ROI works locally and you want
 to scan the whole 2D image.
 
 1. Set `Task` to `Exemplar segmentation`.
-2. Enable large-image local inference.
+2. Enable tiled inference.
 3. Choose a local ROI size. This becomes the tile size.
 4. Draw one exemplar box.
 5. Use `Run Current ROI Only` in Advanced mode, or `Run Current ROI` in Simple
@@ -265,8 +266,7 @@ to scan the whole 2D image.
 Useful controls:
 
 - `Tile overlap`: default `15%`, helps reduce missed objects near tile edges.
-- `Merge seam-split objects`: enabled by default, reconnects objects cut by tile
-  boundaries after stitching.
+- Seam-split object merging is enabled internally for tiled scans.
 
 The stitched full-image result is written to:
 
@@ -277,6 +277,42 @@ SAM3 tiled exemplar boxes
 ```
 
 ![Batch local exemplar segmentation scans large images tile by tile](tiled_exemplar_scan.png)
+
+
+## Experimental Folder Batch
+
+Use folder batch when one loaded viewer image or crop defines the exemplar, but
+the images to process live in a folder and should write masks to disk instead
+of filling the viewer with result layers.
+
+1. In Advanced mode, set `Task` to `Exemplar segmentation`.
+2. Select the representative target image or choose `Use separate crop image`.
+3. Enable `Enable tiled inference`; choose tile size and overlap.
+4. Draw or select the exemplar box.
+5. Click `Run Current ROI Only` and inspect the viewer result.
+6. If the local result is acceptable, check `Run folder batch`.
+7. In Step 4, choose `Input folder`, `Output folder`, and `Output format`.
+8. Click `Run Folder Batch`.
+
+Output files use the input stem plus `_mask`, for example:
+
+```text
+input/image001.tif -> output/image001_mask.tif
+input/image001.tif -> output/image001_mask.ome.zarr
+```
+
+Experimental limits:
+
+- Input supports `.tif`, `.tiff`, `.png`, `.jpg`, `.jpeg`, and `.bmp`. TIFF
+  stacks are processed slice by slice.
+- OME-Zarr and ND2 input are not wired yet.
+- Output is one TIFF or OME-Zarr mask per input file.
+- Existing output files are not overwritten.
+- Nested input folders are not mirrored yet.
+- Truly huge full-image masks are not chunk-streamed yet, so avoid using this
+  first folder-batch implementation for `100k x 100k` class images.
+- Batch masks are not automatically loaded into the viewer. Drag output masks
+  or OME-Zarr stores into napari when you need to review quality.
 
 ## Batch 2D Images
 

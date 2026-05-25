@@ -4,13 +4,13 @@
 
 ![napari-sam3-assistant UI](docs/ui.png)
 
-Latest version: `4.3.10`
+Latest version: `4.4.0`
 
 `napari-sam3-assistant` is a napari plugin for local Segment Anything Model 3
 (SAM3) segmentation. It provides:
 
 - a guided `Simple` mode for common segmentation work;
-- an `Advanced` mode for model setup, batch runs, local ROI inference, result
+- an `Advanced` mode for model setup, batch runs, tiled inference, result
   tables, and 3D/video-style propagation;
 - a separate `SAM3 Mask Operations` widget for cleanup, relabeling, isolation,
   merge, overlap inspection, and export.
@@ -26,10 +26,12 @@ corrected, saved, and exported.
 - Search for similar features with exemplar prompting from a drawn region or
   crop image.
 - Correct previews with Live Points using positive and negative clicks.
-- Run local ROI inference on large TIFF or OME-Zarr-style images.
+- Run tiled inference on large TIFF or OME-Zarr-style images.
 - In Advanced mode, run Phase 1 Huge Volume exemplar scans by processing 3D stacks slice by slice and writing tiled masks directly to OME-Zarr.
 - Scan large 2D images tile by tile from an exemplar ROI and stitch the result
   into full-size labels.
+- Run experimental folder batch inference from a tested exemplar, writing TIFF
+  or OME-Zarr masks to disk without loading full batch outputs into the viewer.
 - Propagate prompts through 3D stacks or video-like data when the installed SAM3
   backend supports the workflow.
 - Save previews, clean connected components, relabel values, isolate overlapping
@@ -156,9 +158,9 @@ Fast local segmentation loop:
 5. Click `Save Labels` or `Save & Clean`.
 6. Move to the next object or ROI and repeat.
 
-Large-image ROI loop:
+Tiled ROI loop:
 
-1. Enable local/tiled inference and choose a tile/ROI size.
+1. Enable tiled inference and choose a tile/ROI size.
 2. Draw or select a prompt box/point.
 3. Click `Run Current ROI Only` to test that local region.
 4. Changing ROI size recomputes the next local region; previous active ROIs are reused only when the requested size still matches.
@@ -173,7 +175,17 @@ Exemplar scan loop:
 
 Tiled exemplar scans are a search workflow, not an exact repeat of `Run Current ROI Only`. The current tiled scan uses one exemplar crop as a visual reference for each tile by composing an exemplar-plus-tile image, then writes the tile-side result back to the full canvas. Multiple boxes in the current ROI can help `Run Current ROI Only` when they overlap that ROI, but tiled scan currently uses the first collected exemplar crop as the default reference for all tiles.
 
-Huge Volume Phase 1 is available in Advanced Exemplar mode for 3D stacks. Enable `Enable large-image local inference`, check `Scan all Z slices to OME-Zarr`, then use `Scan Z Stack by Tiles`. This path writes tile labels directly to an OME-Zarr mask store and does not create a full in-memory volume. To curate the result, drag/open the mask as a Labels layer, use `Mask Operations > Mask Cleanup / Multiclass` with `Current slice` or a small `Z range` plus `Manual ROI`/`Drawn ROI`, then use `Region Output` to write the current working region back to the loaded OME-Zarr store/array or export it as TIFF. Region Output reports OME-Zarr shape/chunks/axes/dtype and requires an explicit override before writing to a different store. Mask Cleanup blocks unsafe huge-volume choices such as `Whole volume` and unbounded `Full mask`. Seam merging, cross-Z object linking, and resumable jobs are planned later phases.
+Experimental folder batch loop:
+
+1. In Advanced `Exemplar segmentation`, load one representative image or crop.
+2. Enable tiled inference, choose tile size and overlap, and draw/select the exemplar box.
+3. Click `Run Current ROI Only` to confirm the exemplar works locally.
+4. Check `Run folder batch`; Step 4 shows input folder, output folder, and output format.
+5. Click `Run Folder Batch`. Masks are written to disk with the same input stem plus `_mask`, such as `image001_mask.tif` or `image001_mask.ome.zarr`.
+
+Folder batch is experimental. Input currently supports common 2D image files and TIFF stacks (`.tif`, `.tiff`, `.png`, `.jpg`, `.jpeg`, `.bmp`). OME-Zarr and ND2 input, nested-folder mirroring, overwrite/resume policy, and chunked output for truly huge `100k x 100k` images are not wired yet. Batch outputs are not automatically loaded into the viewer; drag written masks or OME-Zarr outputs into napari to review quality.
+
+Huge Volume Phase 1 is available in Advanced Exemplar mode for 3D stacks. Enable `Enable tiled inference`, check `Scan all Z slices to OME-Zarr`, then use `Scan Z Stack by Tiles`. This path writes tile labels directly to an OME-Zarr mask store and does not create a full in-memory volume. To curate the result, drag/open the mask as a Labels layer, use `Mask Operations > Mask Cleanup / Multiclass` with `Current slice` or a small `Z range` plus `Manual ROI`/`Drawn ROI`, then use `Region Output` to write the current working region back to the loaded OME-Zarr store/array or export it as TIFF. Region Output reports OME-Zarr shape/chunks/axes/dtype and requires an explicit override before writing to a different store. Mask Cleanup blocks unsafe huge-volume choices such as `Whole volume` and unbounded `Full mask`. Seam merging, cross-Z object linking, and resumable jobs are planned later phases.
 
 Advanced mode also includes `Detection threshold`, with default `0.35`. Lower
 values accept weaker candidates and may add false positives. Higher values are
@@ -234,15 +246,15 @@ download SAM3 weights.
 
 ## Citation
 
-If you use `napari-sam3-assistant` in your work, please cite the Zenodo archive for version `4.3.10`:
+If you use `napari-sam3-assistant` in your work, please cite the Zenodo archive for version `4.4.0`:
 
-Teo, Wulin. (2026). `napari-sam3-assistant` (Version 4.3.10) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.20367206
+Teo, Wulin. (2026). `napari-sam3-assistant` (Version 4.4.0) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.20367206
 
 ```bibtex
 @software{teo_2026_napari_sam3_assistant,
   author = {Teo, Wulin},
   title = {napari-sam3-assistant},
-  version = {4.3.10},
+  version = {4.4.0},
   year = {2026},
   publisher = {Zenodo},
   doi = {10.5281/zenodo.20367206},

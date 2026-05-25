@@ -2,9 +2,9 @@ cff-version: 1.2.0
 message: "If you use napari-sam3-assistant in your work, please cite it using this metadata."
 type: software
 title: "napari-sam3-assistant"
-version: "4.3.10"
+version: "4.4.0"
 doi: "10.5281/zenodo.20367206"
-date-released: "2026-05-24"
+date-released: "2026-05-25"
 authors:
   - family-names: "Teo"
     given-names: "Wulin"
@@ -19,4 +19,4 @@ keywords:
   - "segmentation"
   - "microscopy"
   - "image analysis"
-abstract: "A napari plugin for Segment Anything Model 3 image segmentation with Simple and Advanced workflows, text, points, boxes, exemplars, large-image ROI inference, mask operations, and 3D/video-like propagation."
+abstract: "A napari plugin for Segment Anything Model 3 image segmentation with Simple and Advanced workflows, text, points, boxes, exemplars, tiled ROI inference, mask operations, and 3D/video-like propagation."

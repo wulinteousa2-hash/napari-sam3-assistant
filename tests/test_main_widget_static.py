@@ -62,18 +62,26 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     assert "Target image" in advanced_source
     assert "Only change these if your image layout or detection behavior needs manual tuning." in advanced_source
     assert "Detection threshold" in advanced_source
-    assert "Enable large-image local inference" in advanced_source
+    assert "Enable tiled inference" in advanced_source
     assert "Use separate crop image" in advanced_source
     assert "Scan Target Image by Tiles" in advanced_source
     assert "Scan all Z slices to OME-Zarr" in advanced_source
     assert "Scan Z Stack by Tiles" in advanced_source
+    assert "Run folder batch" in advanced_source
+    assert "Run Folder Batch" in advanced_source
+    assert "Input folder" in advanced_source
+    assert "Output folder" in advanced_source
+    assert "folder_batch_input_dir" in advanced_source
+    assert "def _segment_folder_batch_image" in advanced_source
+    assert "Folder batch complete" in advanced_source
+    assert "Folder batch SAM3 inference is not connected yet" not in advanced_source
     assert "HugeVolumeMaskStore" in advanced_source
     assert "_collect_external_exemplar_patch" in advanced_source
     assert "512 x 512" in advanced_source
     assert "1024 x 1024" in advanced_source
     assert "2048 x 2048" in advanced_source
-    assert "Large-image mode ON: local ROI inference" in advanced_source
-    assert "Large-image mode OFF: full-image inference" in advanced_source
+    assert "Tiled inference ON: local ROI inference" in advanced_source
+    assert "Tiled inference OFF: full-image inference" in advanced_source
     assert "SAM3 active ROI" in advanced_source
     assert "Type text prompt, then press Enter to run..." in advanced_source
     assert "textPromptInput" in advanced_source

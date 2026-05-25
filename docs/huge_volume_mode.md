@@ -8,13 +8,14 @@ chunks and write results back to disk immediately.
 ## Current Phase 1 Implementation
 
 The first implementation is available for Advanced Exemplar workflows. Enable
-`Enable large-image local inference`, check `Scan all Z slices to OME-Zarr`, and
+`Enable tiled inference`, check `Scan all Z slices to OME-Zarr`, and
 click `Scan Z Stack by Tiles`. The plugin repeats the 2D tiled exemplar scan for
 each Z/frame slice and writes each tile directly into `s0` of an output mask
 OME-Zarr store. It does not create a dense full-volume `Labels` array.
 
 Current limits:
 
+- Folder batch is a separate experimental disk-output path for common image files and TIFF stacks; it does not yet provide chunked OME-Zarr input processing for truly huge images.
 - input can be an OME-Zarr or 3D TIFF layer if napari/tifffile can read slice
   tiles lazily enough;
 - output is OME-Zarr only;
@@ -47,7 +48,7 @@ For a `400 x 70000 x 40000` uint16 mask, a full in-memory array would be around
 1. Open a 3D image layer, preferably OME-Zarr. A 3D TIFF can work when napari and
    tifffile can read slices and tiles lazily enough.
 2. Set `Task` to `Exemplar segmentation`.
-3. Enable `Enable large-image local inference`.
+3. Enable `Enable tiled inference`.
 4. Choose the tile size with `ROI size` and set `Tile overlap`.
 5. Draw or select an exemplar region.
 6. Check `Scan all Z slices to OME-Zarr`.
