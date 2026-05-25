@@ -149,3 +149,56 @@ def test_huge_volume_guard_allows_current_slice_manual_roi():
 
     assert tab._unsafe_huge_volume_scope_message(layer) is None
     assert tab._selected_scope_shape(layer) == (256, 256)
+
+
+def test_ome_zarr_write_target_blocks_different_store_by_default(tmp_path):
+    import pytest
+
+    from napari_sam3_assistant.huge_volume import HugeVolumeMaskStore
+
+    pytest.importorskip("zarr")
+
+    class CheckBox:
+        def isChecked(self):
+            return False
+
+    source = HugeVolumeMaskStore.create(tmp_path / "source.ome.zarr", shape=(2, 8, 8), chunks=(1, 4, 4))
+    HugeVolumeMaskStore.create(tmp_path / "other.ome.zarr", shape=(2, 8, 8), chunks=(1, 4, 4))
+
+    tab = MaskCleanupTab.__new__(MaskCleanupTab)
+    tab.allow_different_output_store_check = CheckBox()
+    layer = SimpleNamespace(data=source.array)
+
+    with pytest.raises(ValueError, match="differs from the loaded mask source"):
+        tab._validate_ome_zarr_write_target(layer, tmp_path / "other.ome.zarr", "s0")
+
+
+def test_ome_zarr_region_write_uses_loaded_array_path_and_persists(tmp_path):
+    import numpy as np
+    import pytest
+
+    from napari_sam3_assistant.huge_volume import HugeVolumeMaskStore
+
+    pytest.importorskip("zarr")
+
+    class CheckBox:
+        def isChecked(self):
+            return False
+
+    store = HugeVolumeMaskStore.create(tmp_path / "mask.ome.zarr", shape=(2, 8, 8), chunks=(1, 4, 4))
+    tab = MaskCleanupTab.__new__(MaskCleanupTab)
+    tab.allow_different_output_store_check = CheckBox()
+    tab._pending_region_edits = {}
+    layer = SimpleNamespace(data=store.array)
+    edited = np.full((2, 2), 7, dtype=np.uint32)
+
+    tab._write_working_region_to_ome_zarr(
+        layer,
+        edited,
+        (1, slice(2, 4), slice(3, 5)),
+        tmp_path / "mask.ome.zarr",
+        "s0",
+    )
+
+    reopened = HugeVolumeMaskStore.open(tmp_path / "mask.ome.zarr", array_path="s0")
+    assert np.array_equal(reopened.array[1, 2:4, 3:5], edited)

@@ -4,7 +4,7 @@
 
 ![napari-sam3-assistant UI](docs/ui.png)
 
-Latest version: `4.3.9`
+Latest version: `4.3.10`
 
 `napari-sam3-assistant` is a napari plugin for local Segment Anything Model 3
 (SAM3) segmentation. It provides:
@@ -173,7 +173,7 @@ Exemplar scan loop:
 
 Tiled exemplar scans are a search workflow, not an exact repeat of `Run Current ROI Only`. The current tiled scan uses one exemplar crop as a visual reference for each tile by composing an exemplar-plus-tile image, then writes the tile-side result back to the full canvas. Multiple boxes in the current ROI can help `Run Current ROI Only` when they overlap that ROI, but tiled scan currently uses the first collected exemplar crop as the default reference for all tiles.
 
-Huge Volume Phase 1 is available in Advanced Exemplar mode for 3D stacks. Enable `Enable large-image local inference`, check `Scan all Z slices to OME-Zarr`, then use `Scan Z Stack by Tiles`. This path writes tile labels directly to an OME-Zarr mask store and does not create a full in-memory volume. To curate the result, drag/open the mask as a Labels layer, use `Mask Operations > Mask Cleanup / Multiclass` with `Current slice` or a small `Z range` plus `Manual ROI`/`Drawn ROI`, then use `Region Output` to write the current working region back to OME-Zarr or export it as TIFF. Mask Cleanup blocks unsafe huge-volume choices such as `Whole volume` and unbounded `Full mask`. Seam merging, cross-Z object linking, and resumable jobs are planned later phases.
+Huge Volume Phase 1 is available in Advanced Exemplar mode for 3D stacks. Enable `Enable large-image local inference`, check `Scan all Z slices to OME-Zarr`, then use `Scan Z Stack by Tiles`. This path writes tile labels directly to an OME-Zarr mask store and does not create a full in-memory volume. To curate the result, drag/open the mask as a Labels layer, use `Mask Operations > Mask Cleanup / Multiclass` with `Current slice` or a small `Z range` plus `Manual ROI`/`Drawn ROI`, then use `Region Output` to write the current working region back to the loaded OME-Zarr store/array or export it as TIFF. Region Output reports OME-Zarr shape/chunks/axes/dtype and requires an explicit override before writing to a different store. Mask Cleanup blocks unsafe huge-volume choices such as `Whole volume` and unbounded `Full mask`. Seam merging, cross-Z object linking, and resumable jobs are planned later phases.
 
 Advanced mode also includes `Detection threshold`, with default `0.35`. Lower
 values accept weaker candidates and may add false positives. Higher values are
@@ -234,15 +234,15 @@ download SAM3 weights.
 
 ## Citation
 
-If you use `napari-sam3-assistant` in your work, please cite the Zenodo archive for version `4.3.9`:
+If you use `napari-sam3-assistant` in your work, please cite the Zenodo archive for version `4.3.10`:
 
-Teo, Wulin. (2026). `napari-sam3-assistant` (Version 4.3.9) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.20367206
+Teo, Wulin. (2026). `napari-sam3-assistant` (Version 4.3.10) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.20367206
 
 ```bibtex
 @software{teo_2026_napari_sam3_assistant,
   author = {Teo, Wulin},
   title = {napari-sam3-assistant},
-  version = {4.3.9},
+  version = {4.3.10},
   year = {2026},
   publisher = {Zenodo},
   doi = {10.5281/zenodo.20367206},

@@ -14,6 +14,11 @@ def test_mask_cleanup_region_output_exposes_disk_backed_save_workflow():
     assert "def save_working_region" in source
     assert "def _write_working_region_to_ome_zarr" in source
     assert "HugeVolumeMaskStore.open" in source
+    assert "region_output_array_path_edit" in source
+    assert "Allow different output store" in source
+    assert "inspect_ome_zarr_array" in source
+    assert "inspect_ome_zarr_path" in source
+    assert "allow_different_output_store_check" in source
     assert "store.array[z0:z1, y0:y1, x0:x1]" in source
     assert "_pending_region_edits.pop" in source
     assert "export_service.export(sub, path_text, \"TIFF\")" in source

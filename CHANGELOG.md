@@ -2,6 +2,11 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.3.10
+
+### Fixed
+- Added OME-Zarr source detection for Mask Cleanup write-back: loaded mask stores now report array path, shape, chunks, axes, and dtype; Region Output auto-fills the matching store/array and blocks accidental writes to a different OME-Zarr unless explicitly allowed.
+
 ## 4.3.9
 
 ### Added
@@ -312,7 +317,6 @@ All notable changes to `napari-sam3-assistant` are documented here.
 - README guidance now keeps the main GPU/CUDA setup concise and links CPU-only users to the dedicated CPU-only setup guide.
 
 ### Fixed
-
 - Fixed CPU-only environments accidentally inheriting a saved `cuda` setting and failing with raw `Torch not compiled with CUDA enabled` errors.
 - Fixed Advanced mode startup after the CPU/GPU validation changes by importing `torch` where device availability is checked.
 - Fixed Simple mode so runtime device selection follows the active environment instead of silently converting CPU back to CUDA from saved settings.
@@ -332,14 +336,12 @@ All notable changes to `napari-sam3-assistant` are documented here.
 ## 4.0.4
 
 ### Fixed
-
 - Fixed `3D/video` propagation axis handling for RGB-like and multichannel stacks so frame export, propagated labels, and box coordinates stay aligned with the selected image axes.
 - Added regression tests for channel-last RGB stacks and explicit channel-axis video stacks to reduce the risk of future `3D/video` axis regressions.
 
 ## 4.0.3
 
 ### Fixed
-
 - Fixed 2D box-only preview prompting so it uses instance box segmentation instead of grounding-style box prompting.
 - Fixed 2D box-only preview masks to stay inside each prompted box, making 2D box behavior distinct from exemplar prompting.
 ## 4.0.2
@@ -359,7 +361,6 @@ Small compatibility release focused on SAM3.1 3D/video troubleshooting.
 - Added Windows README guidance that points affected users to `windows_sam31_workaround/README.md` when `SAM3.1` multiplex propagation fails with `No available kernel. Aborting execution!`.
 
 ### Fixed
-
 - Fixed the earlier `SAM3.1` 3D/video session-start crash caused by passing `offload_state_to_cpu` into installed `sam3` backends whose `init_state()` does not accept that keyword.
 - Kept the plugin-side compatibility handling for that `start_session` / `init_state` API mismatch so propagation can begin on backends that otherwise support `SAM3.1` multiplex.
 
@@ -401,7 +402,6 @@ Major UI update for image-segmentation workflows.
 - The mode labels are short: `Simple` and `Advanced`.
 
 ### Fixed
-
 - Fixed Simple mode runs so the SAM3 image model is prepared before preview inference.
 - Fixed Simple exemplar runs that could create prompt/result boxes without writing a mask until the model had been loaded manually in Advanced.
 - Kept Advanced model path, model type, and device controls from overriding Simple mode's SAM3.0 image-task path.
@@ -410,7 +410,6 @@ Major UI update for image-segmentation workflows.
 ## 3.3.0
 
 ### Fixed
-
 - Fixed 3D/video box-only prompts so they initialize tracker propagation instead of only producing a mask on the prompted frame.
 - Preserved non-empty prompted-frame masks when later 3D/video updates for the same frame are empty.
 - Kept text-plus-box 3D/video prompts on the semantic box request path while routing box-only prompts through tracker box points.
@@ -423,7 +422,6 @@ Major UI update for image-segmentation workflows.
 - Made the primary run button task-aware: `Run Preview` changes to `Start 3D Propagation` in 3D/video mode, and existing-session propagation is disabled until a valid session exists.
 
 ### Fixed
-
 - Fixed 3D/video point prompting for SAM3 video predictors by sending normalized point coordinates and an object id with point prompts.
 - Fixed initial 3D/video point propagation crashes caused by missing SAM3 tracker frame-cache entries before propagation.
 - Fixed stale SAM3 video-session handling after cancelling or clearing prompt state so users can start a new 3D/video run without restarting napari.

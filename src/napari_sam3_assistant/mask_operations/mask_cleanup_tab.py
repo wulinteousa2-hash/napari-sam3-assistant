@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 from typing import Callable
 
 import numpy as np
@@ -39,7 +40,7 @@ from .fast_component_index_service import FastComponentIndex, FastComponentIndex
 from .component_table_widget import ComponentTableWidget
 from .models import AxonHoleCandidate, ComponentRecord
 from .utils import copy_layer_geometry, image_layer_names, labels_layer_names, safe_get_layer, shapes_layer_names, unique_layer_name
-from ..huge_volume import HugeVolumeMaskStore
+from ..huge_volume import HugeVolumeMaskStore, OmeZarrMaskSource, inspect_ome_zarr_array, inspect_ome_zarr_path
 from ..widgets.collapsible_panel import CollapsiblePanel
 
 
@@ -81,6 +82,8 @@ class MaskCleanupTab(QWidget):
         self._batch_preview_indexer: object = Ellipsis
         self._batch_preview_shape: tuple[int, ...] | None = None
         self._pending_region_edits: dict[tuple, np.ndarray] = {}
+        self._last_autofilled_region_output_path: str | None = None
+        self._last_autofilled_region_output_array_path: str | None = None
         self._build_ui()
         self.refresh()
 
@@ -120,6 +123,7 @@ class MaskCleanupTab(QWidget):
         self._sync_scope_controls()
         self._sync_work_region_controls()
         self._sync_huge_volume_status()
+        self._sync_region_output_from_target()
         self.refresh_unique_values()
         self._track_target_layer()
         self._sync_mouse_action_callback()
@@ -162,12 +166,13 @@ class MaskCleanupTab(QWidget):
                 return
             self._log(f"Exported {layer.name} working region to {path}.")
             return
+        array_path = self.region_output_array_path_edit.text().strip() or "s0"
         try:
-            self._write_working_region_to_ome_zarr(layer, sub, indexer, Path(path_text))
+            self._write_working_region_to_ome_zarr(layer, sub, indexer, Path(path_text), array_path)
         except Exception as exc:
             self._log(f"OME-Zarr write-back failed: {exc}")
             return
-        self._log(f"Wrote {layer.name} working region back to {path_text}/s0.")
+        self._log(f"Wrote {layer.name} working region back to {path_text}/{array_path.strip('/') or 's0'}.")
 
     def analyze_layer(self) -> None:
         layer = self._target_layer()
@@ -1634,10 +1639,19 @@ class MaskCleanupTab(QWidget):
         self.region_output_format_combo.addItem("TIFF export", "tiff")
         self.region_output_format_combo.setToolTip(
             "Save exactly the current Operation scope plus Working Region. "
-            "OME-Zarr write-back updates s0 in-place; TIFF export writes the selected 2D/3D region as a file."
+            "OME-Zarr write-back updates the selected array path in-place; TIFF export writes the selected 2D/3D region as a file."
         )
+        self.region_output_format_combo.currentIndexChanged.connect(lambda _index: self._sync_region_output_from_target())
         self.region_output_path_edit = QLineEdit()
         self.region_output_path_edit.setPlaceholderText("Mask OME-Zarr folder or TIFF output path")
+        self.region_output_array_path_edit = QLineEdit("s0")
+        self.region_output_array_path_edit.setPlaceholderText("s0")
+        self.region_output_array_path_edit.setToolTip("OME-Zarr array path to update, usually s0. This is auto-filled from the loaded OME-Zarr mask when available.")
+        self.allow_different_output_store_check = QCheckBox("Allow different output store")
+        self.allow_different_output_store_check.setToolTip(
+            "Leave off for normal write-back. When off, the output store and array path must match the OME-Zarr mask loaded in napari."
+        )
+        self.allow_different_output_store_check.setChecked(False)
         choose_output_btn = QPushButton("Choose")
         choose_output_btn.clicked.connect(self.choose_region_output_path)
         save_region_btn = QPushButton("Save Working Region")
@@ -1654,6 +1668,8 @@ class MaskCleanupTab(QWidget):
         output_action_row.addStretch(1)
         output_form.addRow("Format", self.region_output_format_combo)
         output_form.addRow("Path", output_path_row)
+        output_form.addRow("Array", self.region_output_array_path_edit)
+        output_form.addRow("Safety", self.allow_different_output_store_check)
         output_form.addRow(output_action_row)
         components_layout.addWidget(QLabel("Region Output"))
         components_layout.addLayout(output_form)
@@ -2056,18 +2072,22 @@ class MaskCleanupTab(QWidget):
         total = self._shape_pixel_count(shape)
         message = self._unsafe_huge_volume_scope_message(layer)
         shape_text = " x ".join(str(value) for value in shape)
+        source = self._ome_zarr_source_for_layer(layer)
+        source_text = f" Loaded OME-Zarr: {source.display_text()}." if source is not None else ""
         if message:
             self.huge_volume_status_label.setText(
-                f"Huge/lazy target {shape_text} ({source_kind}). {message}"
+                f"Huge/lazy target {shape_text} ({source_kind}). {message}{source_text}"
             )
         elif self._is_huge_volume_layer(layer):
             scoped_shape = self._selected_scope_shape(layer)
             scoped_text = " x ".join(str(value) for value in scoped_shape) if scoped_shape else "selected region"
             self.huge_volume_status_label.setText(
-                f"Huge-volume safe mode: target {shape_text} ({source_kind}); selected scope {scoped_text}."
+                f"Huge-volume safe mode: target {shape_text} ({source_kind}); selected scope {scoped_text}.{source_text}"
             )
         else:
-            self.huge_volume_status_label.setText(f"Target {shape_text} ({source_kind}); normal in-memory operations allowed.")
+            self.huge_volume_status_label.setText(
+                f"Target {shape_text} ({source_kind}); normal in-memory operations allowed.{source_text}"
+            )
 
     def _unsafe_huge_volume_scope_message(self, layer) -> str | None:
         if not self._is_huge_volume_layer(layer):
@@ -2103,8 +2123,77 @@ class MaskCleanupTab(QWidget):
         name = type(data).__name__.lower()
         return any(token in module or token in name for token in ("zarr", "dask"))
 
+    def _ome_zarr_source_for_layer(self, layer) -> OmeZarrMaskSource | None:
+        source = inspect_ome_zarr_array(layer.data)
+        if source is not None:
+            return source
+        source_path = self._layer_source_path(layer)
+        if source_path is None:
+            return None
+        array_path = (
+            self.region_output_array_path_edit.text().strip()
+            if hasattr(self, "region_output_array_path_edit")
+            else "s0"
+        ) or "s0"
+        try:
+            return inspect_ome_zarr_path(source_path, array_path)
+        except Exception:
+            shape = self._layer_shape(layer)
+            if not shape:
+                return None
+            return OmeZarrMaskSource(
+                store_path=source_path,
+                array_path=array_path.strip("/") or "s0",
+                shape=shape,
+                chunks=None,
+                dtype=str(getattr(layer.data, "dtype", "unknown")),
+                axes=None,
+            )
+
+    def _layer_source_path(self, layer) -> Path | None:
+        candidates = []
+        source = getattr(layer, "source", None)
+        candidates.append(getattr(source, "path", None))
+        metadata = getattr(layer, "metadata", {}) or {}
+        if isinstance(metadata, dict):
+            candidates.extend([metadata.get("source_path"), metadata.get("path"), metadata.get("ome_zarr_path")])
+        for candidate in candidates:
+            if not candidate:
+                continue
+            raw = str(candidate)
+            parsed = urlparse(raw)
+            path = Path(unquote(parsed.path)) if parsed.scheme == "file" else Path(raw)
+            text = str(path).lower()
+            if ".ome.zarr" in text or text.endswith(".zarr"):
+                return path
+        return None
+
+    def _sync_region_output_from_target(self) -> None:
+        if not hasattr(self, "region_output_path_edit"):
+            return
+        if self.region_output_format_combo.currentData() != "ome_zarr":
+            return
+        layer = self._target_layer()
+        if layer is None:
+            return
+        source = self._ome_zarr_source_for_layer(layer)
+        if source is None or source.store_path is None:
+            return
+        path_text = str(source.store_path)
+        current_path = self.region_output_path_edit.text().strip()
+        if not current_path or current_path == self._last_autofilled_region_output_path:
+            self.region_output_path_edit.setText(path_text)
+            self._last_autofilled_region_output_path = path_text
+        current_array = self.region_output_array_path_edit.text().strip()
+        if not current_array or current_array == self._last_autofilled_region_output_array_path:
+            self.region_output_array_path_edit.setText(source.array_path)
+            self._last_autofilled_region_output_array_path = source.array_path
+
     def _layer_source_kind(self, layer) -> str:
         data = layer.data
+        source = self._ome_zarr_source_for_layer(layer)
+        if source is not None:
+            return f"OME-Zarr {type(data).__name__} /{source.array_path}"
         if self._is_lazy_layer_data(data):
             return type(data).__name__
         return f"{type(data).__name__}"
@@ -2136,6 +2225,7 @@ class MaskCleanupTab(QWidget):
         self._sync_scope_controls()
         self._sync_work_region_controls()
         self._sync_huge_volume_status()
+        self._sync_region_output_from_target()
         self.refresh_unique_values()
         self._track_target_layer()
         self._sync_mouse_action_callback()
@@ -2324,8 +2414,11 @@ class MaskCleanupTab(QWidget):
         scoped_data: np.ndarray,
         indexer: object,
         path: Path,
+        array_path: str = "s0",
     ) -> None:
-        store = HugeVolumeMaskStore.open(path)
+        array_path = array_path.strip("/") or "s0"
+        self._validate_ome_zarr_write_target(layer, path, array_path)
+        store = HugeVolumeMaskStore.open(path, array_path=array_path)
         bounds, data = self._ome_zarr_region_from_indexer(layer, indexer, scoped_data)
         z0, z1, y0, y1, x0, x1 = bounds
         store_shape = tuple(int(value) for value in store.array.shape)
@@ -2337,8 +2430,58 @@ class MaskCleanupTab(QWidget):
         write_data = np.asarray(data)
         if tuple(write_data.shape) != expected_shape:
             raise ValueError(f"Selected data shape {tuple(write_data.shape)} does not match region {expected_shape}.")
+        self._validate_ome_zarr_write_dtype(write_data, store.array.dtype)
         store.array[z0:z1, y0:y1, x0:x1] = write_data.astype(store.array.dtype, copy=False)
         self._pending_region_edits.pop(self._region_edit_key(layer, indexer), None)
+
+    def _validate_ome_zarr_write_target(self, layer, path: Path, array_path: str) -> None:
+        loaded_source = self._ome_zarr_source_for_layer(layer)
+        output_source = inspect_ome_zarr_path(path, array_path)
+        self._validate_ome_zarr_axes(output_source)
+        if loaded_source is not None:
+            self._validate_ome_zarr_axes(loaded_source)
+            if loaded_source.store_path is not None and not self.allow_different_output_store_check.isChecked():
+                if not self._same_filesystem_path(path, loaded_source.store_path) or array_path != loaded_source.array_path:
+                    raise ValueError(
+                        "Output OME-Zarr store/array differs from the loaded mask source. "
+                        "Use the loaded mask store for write-back, or enable 'Allow different output store' deliberately."
+                    )
+            if loaded_source.shape and tuple(output_source.shape) != tuple(loaded_source.shape):
+                raise ValueError(
+                    f"Output OME-Zarr shape {tuple(output_source.shape)} does not match loaded mask shape {tuple(loaded_source.shape)}."
+                )
+        layer_shape = self._layer_shape(layer)
+        if layer_shape and tuple(output_source.shape) != tuple(layer_shape):
+            raise ValueError(f"Output OME-Zarr shape {tuple(output_source.shape)} does not match layer shape {tuple(layer_shape)}.")
+
+    def _validate_ome_zarr_axes(self, source: OmeZarrMaskSource) -> None:
+        if source.axes is None:
+            return
+        axes = tuple(axis.lower() for axis in source.axes)
+        if axes != ("z", "y", "x"):
+            raise ValueError(
+                f"OME-Zarr write-back expects z/y/x axes for 3D masks; /{source.array_path} declares {source.axes}."
+            )
+
+    def _validate_ome_zarr_write_dtype(self, data: np.ndarray, dtype: np.dtype) -> None:
+        target_dtype = np.dtype(dtype)
+        if not np.issubdtype(target_dtype, np.integer):
+            raise ValueError(f"OME-Zarr mask write-back requires an integer target dtype; got {target_dtype}.")
+        if data.size == 0:
+            return
+        info = np.iinfo(target_dtype)
+        min_value = int(np.min(data))
+        max_value = int(np.max(data))
+        if min_value < info.min or max_value > info.max:
+            raise ValueError(
+                f"Edited labels [{min_value}, {max_value}] do not fit OME-Zarr target dtype {target_dtype}."
+            )
+
+    def _same_filesystem_path(self, left: Path, right: Path) -> bool:
+        try:
+            return left.expanduser().resolve() == right.expanduser().resolve()
+        except Exception:
+            return str(left.expanduser()) == str(right.expanduser())
 
     def _ome_zarr_region_from_indexer(
         self,
