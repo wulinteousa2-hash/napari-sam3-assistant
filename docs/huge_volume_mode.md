@@ -43,6 +43,26 @@ mask:  (1, 1024, 1024) or (1, 2048, 2048)
 For a `400 x 70000 x 40000` uint16 mask, a full in-memory array would be around
 `2.24 TB` before overhead. The plugin must not create that array.
 
+## Rechunk an Existing Mask Safely
+
+Use the rechunking utility when an existing 2D or 3D OME-Zarr mask has chunks
+that are too large for interactive editing. It always creates a new store and
+refuses to overwrite the source or an existing destination:
+
+```bash
+python -m napari_sam3_assistant.huge_volume.rechunk \
+  SOURCE_MASK.ome.zarr \
+  DESTINATION_MASK_1024.ome.zarr \
+  --array-path labels/labels/s0 \
+  --xy-chunk 1024
+```
+
+The copy preserves group and array attributes, reads one source chunk at a
+time, skips all-zero source chunks, and records a `sam3_rechunk.complete`
+marker in the destination root. Keep writable working masks outside a
+workspace's replaceable `*_assets` snapshot directory; a workspace manifest
+should reference durable mask data rather than own its only copy.
+
 ## Current User Workflow
 
 1. Open a 3D image layer, preferably OME-Zarr. A 3D TIFF can work when napari and

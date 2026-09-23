@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import numpy as np
+from napari_sam3_assistant.core.models import Sam3Task
 
 from napari_sam3_assistant.widgets.shared.shared_context import SharedContext
 from napari_sam3_assistant.widgets.simple.simple_mode_controller import SimpleModeController
@@ -65,6 +66,18 @@ class FakeRouter:
 
     def execution_owner(self):
         return self._owner
+
+
+def test_current_task_normalizes_qt_string_data_and_labels_it():
+    owner = SimpleNamespace(_current_task=lambda: "2d_segmentation")
+    controller = SimpleModeController(
+        SharedContext(viewer=None, task_router=FakeRouter(owner))
+    )
+
+    assert controller.current_task() is Sam3Task.SEGMENT_2D
+    assert controller.task_label("2d_segmentation") == "2D"
+
+
 
 
 def test_live_points_accept_clear_accumulates_preview_and_resets_points():

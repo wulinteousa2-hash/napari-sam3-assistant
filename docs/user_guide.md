@@ -25,6 +25,13 @@ instead of exposing every backend option at once.
 8. Review the generated napari layer.
 9. Click `Mask Ops` when the result needs cleanup, merge, or export.
 
+For `Simple > Exemplar` on a large image, enable tiled inference and choose the
+tile size and overlap. `Run Current ROI` tests the real scan-grid tile nearest
+the exemplar; `Scan Full Image` applies the same inference path across the
+image. A tile containing the exemplar uses its natural pixels and localized
+box, while other tiles use a context-preserving reference. Tiled composition
+keeps SAM3 instances separate even when neighboring masks touch.
+
 Simple task tabs:
 
 | Task | Use it for | Prompt |
@@ -234,7 +241,13 @@ ROI behavior:
 
 - Point prompts use the latest point as the ROI anchor.
 - Box prompts use the box center and keep the box inside the local window when
-  possible.
+  possible for non-exemplar tasks.
+- Exemplar previews snap to the actual full-scan grid tile nearest the box and
+  use the same inference path as the corresponding scan tile. A tile containing
+  the exemplar uses its natural pixels and localized box; other tiles use a
+  context-preserving reference crop with the original small box retained.
+- Tiled composition preserves SAM3 instance IDs, so touching neighboring objects
+  are not collapsed into one label merely because their masks meet.
 - Live Points use the latest point as the ROI anchor.
 - If a new point or box remains inside the active ROI, the same ROI is reused.
 - If a new point or box falls outside the active ROI, the ROI is rebuilt around
@@ -263,6 +276,9 @@ to scan the whole 2D image.
 6. If the preview is acceptable, click `Scan Full Image by Tiles` in Advanced
    mode, or `Scan Full Image` in Simple mode.
 
+
+The final composed scan can still differ in overlap regions because earlier
+tiles take precedence, and seam merging runs after all tiles are combined.
 Useful controls:
 
 - `Tile overlap`: default `15%`, helps reduce missed objects near tile edges.

@@ -118,7 +118,8 @@ class SimpleRunPanel(QGroupBox):
         else:
             self.run_btn.setText("Run")
         self.run_btn.setToolTip(
-            "Run one preview on the current ROI or current image."
+            "Preview the actual scan-grid tile nearest the exemplar. The combined scan may "
+            "still differ where overlapping tiles are composed."
             if task == Sam3Task.EXEMPLAR
             else "Run the selected task and write preview layers."
         )

@@ -15,9 +15,14 @@ contributions:
     - id: napari-sam3-assistant.make_mask_operations_widget
       title: SAM3 Mask Operations
       python_name: napari_sam3_assistant.widgets.mask_operations_widget:MaskOperationsWidget
+    - id: napari-sam3-assistant.make_workspace_widget
+      title: SAM3 Workspace Manager
+      python_name: napari_sam3_assistant.widgets.workspace_widget:WorkspaceManagerWidget
 
   widgets:
     - command: napari-sam3-assistant.make_widget
       display_name: SAM3 Assistant
     - command: napari-sam3-assistant.make_mask_operations_widget
       display_name: SAM3 Mask Operations
+    - command: napari-sam3-assistant.make_workspace_widget
+      display_name: "SAM3 Assistant: Workspace Manager"

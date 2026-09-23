@@ -39,6 +39,10 @@ def test_components_working_region_uses_roi_scoped_writeback():
     assert "Working Region" in source
     assert 'self.work_region_combo.addItem("Manual ROI", "manual")' in source
     assert 'self.work_region_combo.addItem("Drawn ROI", "drawn")' in source
+    assert 'menu.addAction("Activate local cleanup here")' in source
+    assert 'QPushButton("Activate View Center")' in source
+    assert "LOCAL_REGION_PERCENT_PRESETS" in source
+    assert "def _activate_local_cleanup_region" in source
     assert "def _work_region_slices" in source
     assert "def _replace_layer_region_data" in source
     assert "source[indexer] = updated_region" in source

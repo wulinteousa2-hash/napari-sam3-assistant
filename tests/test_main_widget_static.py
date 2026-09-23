@@ -6,6 +6,7 @@ from napari_sam3_assistant.widgets.main_widget import _is_cuda_kernel_image_erro
 MAIN_WIDGET_SOURCE = Path("src/napari_sam3_assistant/widgets/main_widget.py")
 ADVANCED_WIDGET_SOURCE = Path("src/napari_sam3_assistant/widgets/advanced/advanced_mode_panel.py")
 SIMPLE_RUN_SOURCE = Path("src/napari_sam3_assistant/widgets/simple/simple_run_panel.py")
+SIMPLE_CONTROLLER_SOURCE = Path("src/napari_sam3_assistant/widgets/simple/simple_mode_controller.py")
 SIMPLE_MODEL_SOURCE = Path("src/napari_sam3_assistant/widgets/simple/simple_model_panel.py")
 SIMPLE_WORKFLOW_SOURCE = Path("src/napari_sam3_assistant/widgets/simple/simple_workflow_panel.py")
 LIVE_POINTS_ACCEPT_SOURCE = Path("src/napari_sam3_assistant/widgets/live_points_accept.py")
@@ -18,6 +19,7 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     simple_run_source = SIMPLE_RUN_SOURCE.read_text(encoding="utf-8")
     simple_model_source = SIMPLE_MODEL_SOURCE.read_text(encoding="utf-8")
     simple_workflow_source = SIMPLE_WORKFLOW_SOURCE.read_text(encoding="utf-8")
+    simple_controller_source = SIMPLE_CONTROLLER_SOURCE.read_text(encoding="utf-8")
     manifest_source = NAPARI_MANIFEST.read_text(encoding="utf-8")
 
     assert 'QRadioButton("Simple")' in Path("src/napari_sam3_assistant/widgets/mode_switch_bar.py").read_text(encoding="utf-8")
@@ -32,6 +34,10 @@ def test_widget_uses_clear_model_and_prompt_action_labels():
     assert "Mask Ops" in simple_run_source
     assert "Scan Full Image" in simple_run_source
     assert "Run Current ROI" in simple_run_source
+    assert "router.run_current_task()" in simple_controller_source
+    assert "owner._run_batch_local_exemplar_task()" in simple_controller_source
+    assert "self._run_tiled_exemplar_preview(bundle, anchor)" in advanced_source
+    assert advanced_source.count("self._infer_tiled_exemplar_tile(") >= 2
     assert "_on_result_state_changed" in simple_run_source
     assert "has_preview_labels_layer" in simple_run_source
     assert "SimpleWorkflowPanel" in simple_workflow_source

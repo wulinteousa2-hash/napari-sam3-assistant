@@ -124,7 +124,13 @@ class SimpleModeController(QObject):
         owner = self.owner
         if owner is None or not hasattr(owner, "_current_task"):
             return Sam3Task.SEGMENT_2D
-        return owner._current_task()
+        value = owner._current_task()
+        if isinstance(value, Sam3Task):
+            return value
+        try:
+            return Sam3Task(str(value))
+        except (TypeError, ValueError):
+            return Sam3Task.SEGMENT_2D
 
     def set_task(self, task: Sam3Task) -> None:
         owner = self.owner
@@ -602,7 +608,7 @@ class SimpleModeController(QObject):
         if router is not None:
             router.open_mask_operations()
 
-    def task_label(self, task: Sam3Task) -> str:
+    def task_label(self, task: Sam3Task | str) -> str:
         labels = {
             Sam3Task.SEGMENT_2D: "2D",
             Sam3Task.TEXT: "Text",
@@ -610,7 +616,12 @@ class SimpleModeController(QObject):
             Sam3Task.EXEMPLAR: "Exemplar",
             Sam3Task.SEGMENT_3D: "3D/Video",
         }
-        return labels.get(task, str(task.value))
+        if not isinstance(task, Sam3Task):
+            try:
+                task = Sam3Task(str(task))
+            except (TypeError, ValueError):
+                return str(getattr(task, "value", task))
+        return labels.get(task, task.value)
 
     def _select_combo_data(self, combo: Any, value: Any) -> None:
         index = combo.findData(value)

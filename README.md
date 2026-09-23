@@ -4,7 +4,7 @@
 
 ![napari-sam3-assistant UI](docs/ui.png)
 
-Latest version: `4.4.0`
+Latest version: `4.5.0`
 
 `napari-sam3-assistant` is a napari plugin for local Segment Anything Model 3
 (SAM3) segmentation. It provides:
@@ -48,6 +48,7 @@ Start here:
 4. [Mask operations](docs/mask_operations.md)
 5. [Troubleshooting](docs/troubleshooting.md)
 6. [Huge Volume Mode](docs/huge_volume_mode.md)
+7. [Workspace Manager](docs/workspace_manager.md)
 
 Specialized setup:
 
@@ -70,6 +71,14 @@ Maintainer notes:
    `Run`, `Run Current ROI`, or `Start 3D`.
 7. Use `Mask Ops` or `Plugins > SAM3 Mask Operations` when the preview needs
    cleanup, merge, or export.
+
+For a large image in `Simple > Exemplar`, enable tiled inference, select the
+tile size and overlap, then use `Run Current ROI` to test the real scan-grid
+tile nearest the exemplar. If the preview is acceptable, use `Scan Full Image`.
+The preview and full scan share the same tile inference path: a tile containing
+the exemplar keeps its natural pixels and localized box, other tiles receive a
+context-preserving reference, and SAM3 instance IDs remain separate during
+composition.
 
 For full setup commands, see [Installation](docs/installation.md).
 
@@ -173,7 +182,7 @@ Exemplar scan loop:
 4. Review `SAM3 tiled exemplar labels` and `SAM3 tiled exemplar boxes`.
 5. Use `SAM3 Mask Operations` for cleanup, isolation, merge, and export.
 
-Tiled exemplar scans are a search workflow, not an exact repeat of `Run Current ROI Only`. The current tiled scan uses one exemplar crop as a visual reference for each tile by composing an exemplar-plus-tile image, then writes the tile-side result back to the full canvas. Multiple boxes in the current ROI can help `Run Current ROI Only` when they overlap that ROI, but tiled scan currently uses the first collected exemplar crop as the default reference for all tiles.
+`Run Current ROI Only` snaps to the real scan-grid tile nearest the exemplar and uses the same inference path as `Scan Full Image by Tiles`. A tile containing the exemplar is processed with its natural pixels and the original box localized into that tile. Other tiles receive a context-preserving reference crop with the smaller original box retained inside it. SAM3 instance IDs remain separate during composition, including when neighboring masks touch. The final combined scan can still differ in overlapping regions because earlier tiles take precedence, and optional seam merging runs after all tile results are composed.
 
 Experimental folder batch loop:
 
@@ -246,15 +255,15 @@ download SAM3 weights.
 
 ## Citation
 
-If you use `napari-sam3-assistant` in your work, please cite the Zenodo archive for version `4.4.0`:
+If you use `napari-sam3-assistant` in your work, please cite the Zenodo archive for version `4.5.0`:
 
-Teo, Wulin. (2026). `napari-sam3-assistant` (Version 4.4.0) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.20367206
+Teo, Wulin. (2026). `napari-sam3-assistant` (Version 4.5.0) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.20367206
 
 ```bibtex
 @software{teo_2026_napari_sam3_assistant,
   author = {Teo, Wulin},
   title = {napari-sam3-assistant},
-  version = {4.4.0},
+  version = {4.5.0},
   year = {2026},
   publisher = {Zenodo},
   doi = {10.5281/zenodo.20367206},

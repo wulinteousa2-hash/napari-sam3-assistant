@@ -1,12 +1,14 @@
 # napari-sam3-assistant documentation
 
 `napari-sam3-assistant` brings local SAM3 segmentation into napari. The plugin
-has two main entry points:
+has three main entry points:
 
 - `Plugins > SAM3 Assistant`: prompt collection, SAM3 execution, previews, and
   quick save.
 - `Plugins > SAM3 Mask Operations`: cleanup, isolation, merge, and export tools
   for napari `Labels` layers.
+- `Plugins > SAM3 Assistant: Workspace Manager`: independent manifest, writable
+  OME-Zarr data references, recent workspaces, and portable snapshots.
 
 ## Choose Your Path
 
@@ -18,6 +20,7 @@ New users should read these in order:
 4. [Mask operations](mask_operations.md)
 5. [Troubleshooting](troubleshooting.md)
 6. [Huge Volume Mode](huge_volume_mode.md)
+7. [Workspace Manager](workspace_manager.md)
 
 Specialized setup:
 

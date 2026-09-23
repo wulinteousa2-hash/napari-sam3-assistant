@@ -2,6 +2,29 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## 4.5.0
+
+### Added
+- Added an independent `SAM3 Assistant: Workspace Manager` with New, Open, Save, Save As, Open Recent, and explicit Portable Snapshot actions.
+- Added writable, lazily opened OME-Zarr mask references and compatibility for importing shared/Myelin version-2 `workspace.json` manifests without copying their mask pixels.
+- Added a safe OME-Zarr rechunk command that writes a new destination store with bounded XY chunks and refuses to overwrite the source or an existing destination.
+- Added bounded local mask-cleanup activation from the canvas or view center, with percentage-based area presets for very large masks.
+
+### Changed
+- Made Exemplar `Run Current ROI Only` snap to an actual full-scan grid tile and use the same inference path as `Scan Full Image by Tiles` in both Simple and Advanced modes.
+- Unified isolated exemplar preview and full-image scanning through one canonical tile inference path, including identical prompt geometry and tile-side result extraction.
+- Clarified in both interfaces that overlap precedence and optional seam merging can still change the final composed full-image result.
+- Made ordinary workspace Save and Save As update a lightweight manifest while durable writable masks remain in their independently owned OME-Zarr stores.
+
+### Fixed
+- Fixed RGB exemplar cropping to use the image's spatial height and width instead of the trailing width/channel dimensions.
+- Kept exemplar extraction lazy and ROI-bounded so collecting a box from a huge TIFF or Zarr image does not materialize the full image.
+- Preserved SAM3 instance IDs while composing tiled results, preventing touching objects from collapsing into one large label.
+- Made tiles containing the source exemplar use their natural pixels with the original box localized into the tile.
+- Replaced context-free tight-crop prompting for other target-image tiles with a bounded contextual reference that retains the original small box.
+- Avoided whole-array conversion in scoped lazy mask operations, region undo, source-image extraction, and drawn-ROI bounds handling.
+- Normalized restored string task values to `Sam3Task`, preventing the Simple workspace refresh error where a string had no `.value` attribute.
+
 ## 4.4.0
 
 ### Added

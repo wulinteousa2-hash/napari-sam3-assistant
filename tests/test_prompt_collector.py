@@ -18,6 +18,19 @@ class ShapeOnlyData:
         raise AssertionError("Large lazy data should not be materialized while collecting prompts.")
 
 
+
+class SliceOnlyData:
+    def __init__(self, data):
+        self._data = np.asarray(data)
+        self.shape = self._data.shape
+
+    def __array__(self, dtype=None):
+        raise AssertionError("Large lazy data should be sliced before materialization.")
+
+    def __getitem__(self, item):
+        return self._data[item]
+
+
 def _viewer(layers, current_step=(0, 0, 0)):
     return SimpleNamespace(layers=FakeLayers(layers), dims=SimpleNamespace(current_step=current_step))
 
@@ -153,3 +166,51 @@ def test_labels_prompt_selects_current_frame_from_stack():
     assert len(bundle.masks) == 1
     assert bundle.masks[0].frame_index == 2
     assert bundle.masks[0].mask.sum() == 4
+
+
+
+def test_exemplar_roi_crop_preserves_rgb_spatial_axes():
+    image_data = np.zeros((10, 12, 3), dtype=np.uint8)
+    image_data[2:6, 3:7] = np.asarray([10, 20, 30], dtype=np.uint8)
+    image = SimpleNamespace(name="rgb", data=image_data)
+    rectangle = np.asarray(
+        [[2.0, 3.0], [2.0, 7.0], [6.0, 7.0], [6.0, 3.0]]
+    )
+    shapes = SimpleNamespace(
+        name="shapes", data=[rectangle], shape_type=["rectangle"]
+    )
+
+    bundle = PromptCollector().collect(
+        _viewer({"rgb": image, "shapes": shapes}),
+        image_layer_name="rgb",
+        task=Sam3Task.EXEMPLAR,
+        shapes_layer_name="shapes",
+    )
+
+    crop = bundle.exemplars[0].roi
+    assert crop.shape == (4, 4, 3)
+    assert np.all(crop == np.asarray([10, 20, 30], dtype=np.uint8))
+
+
+
+def test_exemplar_roi_crop_slices_lazy_image_without_materializing_full_data():
+    backing = np.arange(100 * 120, dtype=np.uint16).reshape(100, 120)
+    image = SimpleNamespace(name="lazy", data=SliceOnlyData(backing))
+    rectangle = np.asarray(
+        [[20.0, 30.0], [20.0, 34.0], [24.0, 34.0], [24.0, 30.0]]
+    )
+    shapes = SimpleNamespace(
+        name="shapes", data=[rectangle], shape_type=["rectangle"]
+    )
+
+    bundle = PromptCollector().collect(
+        _viewer({"lazy": image, "shapes": shapes}),
+        image_layer_name="lazy",
+        task=Sam3Task.EXEMPLAR,
+        shapes_layer_name="shapes",
+    )
+
+    np.testing.assert_array_equal(
+        bundle.exemplars[0].roi,
+        backing[20:24, 30:34],
+    )

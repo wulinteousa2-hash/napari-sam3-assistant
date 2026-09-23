@@ -48,6 +48,7 @@ UNDO_HISTORY_LIMIT = 20
 UNDO_FULL_SNAPSHOT_PIXEL_LIMIT = 25_000_000
 HUGE_VOLUME_PIXEL_LIMIT = 100_000_000
 HUGE_VOLUME_SCOPED_PIXEL_LIMIT = 100_000_000
+LOCAL_REGION_PERCENT_PRESETS = (5, 10, 20, 50)
 
 
 class MaskCleanupTab(QWidget):
@@ -84,6 +85,7 @@ class MaskCleanupTab(QWidget):
         self._pending_region_edits: dict[tuple, np.ndarray] = {}
         self._last_autofilled_region_output_path: str | None = None
         self._last_autofilled_region_output_array_path: str | None = None
+        self._last_local_cleanup_center: tuple[int, ...] | None = None
         self._build_ui()
         self.refresh()
 
@@ -754,7 +756,11 @@ class MaskCleanupTab(QWidget):
         layer = self._target_layer()
         if candidate is None or layer is None:
             return
-        data_position = self._scoped_position_to_layer_coords(candidate.seed, self._batch_preview_indexer, np.asarray(layer.data).ndim)
+        data_position = self._scoped_position_to_layer_coords(
+            candidate.seed,
+            self._batch_preview_indexer,
+            len(self._layer_shape(layer)),
+        )
         self._center_view_on_data_position(layer, np.asarray(data_position, dtype=float))
         preview_layer = safe_get_layer(self.viewer, self._batch_preview_layer_name)
         if preview_layer is not None:
@@ -1031,13 +1037,34 @@ class MaskCleanupTab(QWidget):
         return label_value, component_id
 
     def _open_canvas_context_menu(self, layer, event) -> None:
-        picked = self._pick_clicked_mask(layer, event, source="right-click")
-        if picked is None:
+        coords = self._event_data_coords(layer, event)
+        if coords is None:
             return
-        label_value, component_id = picked
+        picked = None
+        label_value = self._label_value_at_coords(layer, coords)
+        if label_value > 0:
+            picked = self._pick_clicked_mask(layer, event, source="right-click")
+            if picked is not None:
+                label_value, component_id = picked
+            else:
+                component_id = None
+        else:
+            component_id = None
         mode = self._cleanup_subtab()
         menu = QMenu(self)
+        activate_region_action = menu.addAction("Activate local cleanup here")
+        activate_region_action.setToolTip("Set a bounded working area around this click; coordinates stay internal.")
         quick_assign_actions: dict[object, int] = {}
+
+        if picked is None:
+            def handle_region_only_action(selected_action):
+                if selected_action == activate_region_action:
+                    self._activate_local_cleanup_region(layer, coords)
+
+            self._show_canvas_menu(menu, event, handle_region_only_action)
+            return
+
+        menu.addSeparator()
 
         if mode == "values":
             relabel_value_action = menu.addAction(f"Relabel clicked value {label_value} to {int(self.new_value_spin.value())}")
@@ -1045,7 +1072,9 @@ class MaskCleanupTab(QWidget):
             keep_value_action = menu.addAction(f"Keep value {label_value} only")
             select_action = menu.addAction("Select value row only")
             def handle_values_action(selected_action):
-                if selected_action == relabel_value_action:
+                if selected_action == activate_region_action:
+                    self._activate_local_cleanup_region(layer, coords)
+                elif selected_action == relabel_value_action:
                     self.values_to_replace_edit.setText(str(label_value))
                     self.apply_relabel()
                 elif selected_action == delete_value_action:
@@ -1060,7 +1089,13 @@ class MaskCleanupTab(QWidget):
 
         if mode == "components":
             if component_id is None:
-                self.status_label.setText("Component index is stale or not built. Click Analyze Layer before component actions.")
+                self.status_label.setText("Component index is stale or not built. Activate a local area or click Analyze Layer before component actions.")
+
+                def handle_component_region_action(selected_action):
+                    if selected_action == activate_region_action:
+                        self._activate_local_cleanup_region(layer, coords)
+
+                self._show_canvas_menu(menu, event, handle_component_region_action)
                 return
             current_value = int(self.assignment_value_spin.value())
             assign_current_action = menu.addAction(f"Assign indexed component to {current_value}")
@@ -1075,7 +1110,9 @@ class MaskCleanupTab(QWidget):
             delete_component_action.setToolTip("Set only the clicked connected component to background.")
             locate_action = menu.addAction("Select table row only")
             def handle_component_action(selected_action):
-                if selected_action == assign_current_action:
+                if selected_action == activate_region_action:
+                    self._activate_local_cleanup_region(layer, coords)
+                elif selected_action == assign_current_action:
                     self._apply_mouse_action(layer, event, "assign_component")
                 elif selected_action in quick_assign_actions:
                     self.set_assignment_value(quick_assign_actions[selected_action])
@@ -1110,7 +1147,9 @@ class MaskCleanupTab(QWidget):
                 cut_axon_action,
             )
         def handle_local_action(selected_action):
-            if cut_axon_action is not None and selected_action == cut_axon_action:
+            if selected_action == activate_region_action:
+                self._activate_local_cleanup_region(layer, coords)
+            elif cut_axon_action is not None and selected_action == cut_axon_action:
                 self._apply_mouse_action(layer, event, "cut_axon")
             elif selected_action == assign_local_action:
                 self._apply_mouse_action(layer, event, "assign_local_component")
@@ -1600,7 +1639,7 @@ class MaskCleanupTab(QWidget):
         self.analysis_progress.setFormat("Component analysis idle")
         region_form = QFormLayout()
         self.work_region_combo = QComboBox()
-        self.work_region_combo.addItem("Full mask (unsafe for huge)", "full")
+        self.work_region_combo.addItem("Full mask", "full")
         self.work_region_combo.addItem("Manual ROI", "manual")
         self.work_region_combo.addItem("Drawn ROI", "drawn")
         self.work_region_combo.setToolTip(
@@ -1611,6 +1650,19 @@ class MaskCleanupTab(QWidget):
         self.work_roi_combo = QComboBox()
         self.work_roi_combo.setToolTip("Shapes layer used as the working region when Work on is Drawn ROI.")
         self.work_roi_combo.currentIndexChanged.connect(lambda _index: self._on_work_region_changed())
+        self.local_region_size_combo = QComboBox()
+        for percent in LOCAL_REGION_PERCENT_PRESETS:
+            self.local_region_size_combo.addItem(f"{percent}%", percent)
+        self.local_region_size_combo.setToolTip(
+            "Local cleanup area size as a percentage of the target mask height and width."
+        )
+        self.local_region_size_combo.currentIndexChanged.connect(lambda _index: self._reactivate_local_cleanup_region())
+        self.activate_view_center_btn = QPushButton("Activate View Center")
+        self.activate_view_center_btn.setToolTip("Set the working area around the center of the napari view.")
+        self.activate_view_center_btn.clicked.connect(self.activate_local_cleanup_at_view_center)
+        self.clear_local_region_btn = QPushButton("Clear Local Area")
+        self.clear_local_region_btn.setToolTip("Return Working Region to Full mask. Manual and Drawn ROI remain available.")
+        self.clear_local_region_btn.clicked.connect(self.clear_local_cleanup_region)
         self.work_y0_spin = QSpinBox()
         self.work_y1_spin = QSpinBox()
         self.work_x0_spin = QSpinBox()
@@ -1626,7 +1678,13 @@ class MaskCleanupTab(QWidget):
         x_row.addWidget(self.work_x0_spin)
         x_row.addWidget(QLabel("to"))
         x_row.addWidget(self.work_x1_spin)
+        local_region_row = QHBoxLayout()
+        local_region_row.addWidget(self.local_region_size_combo)
+        local_region_row.addWidget(self.activate_view_center_btn)
+        local_region_row.addWidget(self.clear_local_region_btn)
+        local_region_row.addStretch(1)
         region_form.addRow("Work on", self.work_region_combo)
+        region_form.addRow("Local area", local_region_row)
         region_form.addRow("ROI shape", self.work_roi_combo)
         region_form.addRow("Y", y_row)
         region_form.addRow("X", x_row)
@@ -2097,8 +2155,10 @@ class MaskCleanupTab(QWidget):
         region_mode = self.work_region_combo.currentData() if hasattr(self, "work_region_combo") else "full"
         if len(shape) >= 3 and scope == "whole_volume":
             return "Choose Current slice or a small Z range before analyzing or editing this large mask."
-        if region_mode == "full" or self._work_region_slices(layer.data) is None:
-            return "Choose Manual ROI or Drawn ROI so only a bounded XY region is loaded."
+        if region_mode == "full":
+            return "Full mask is selected. Choose Manual ROI or Drawn ROI so only a bounded XY region is loaded."
+        if self._work_region_slices(layer.data) is None:
+            return "Selected ROI is empty or covers the full mask. Choose a bounded Manual ROI or Drawn ROI."
         scoped_shape = self._selected_scope_shape(layer)
         scoped_pixels = self._shape_pixel_count(scoped_shape)
         if scoped_pixels > HUGE_VOLUME_SCOPED_PIXEL_LIMIT:
@@ -2302,6 +2362,145 @@ class MaskCleanupTab(QWidget):
                 self.work_x1_spin.blockSignals(False)
         self.work_roi_combo.setEnabled(drawn)
 
+        has_layer = layer is not None and height > 0 and width > 0
+        for widget_name in (
+            "local_region_size_combo",
+            "activate_view_center_btn",
+            "clear_local_region_btn",
+        ):
+            widget = getattr(self, widget_name, None)
+            if widget is not None:
+                widget.setEnabled(has_layer)
+
+    def activate_local_cleanup_at_view_center(self) -> None:
+        layer = self._target_layer()
+        if layer is None:
+            self._log("Select a target Labels layer before activating local cleanup.")
+            return
+        coords = self._viewer_center_data_coords(layer)
+        if coords is None:
+            self._log("Unable to determine the current view center for local cleanup.")
+            return
+        self._activate_local_cleanup_region(layer, coords)
+
+    def clear_local_cleanup_region(self) -> None:
+        self._last_local_cleanup_center = None
+        self._set_combo_current_data(self.work_region_combo, "full")
+        self._on_work_region_changed()
+        self.status_label.setText("Local cleanup area cleared. Working Region is Full mask.")
+
+    def _reactivate_local_cleanup_region(self) -> None:
+        layer = self._target_layer()
+        center = getattr(self, "_last_local_cleanup_center", None)
+        if layer is None or center is None:
+            return
+        self._activate_local_cleanup_region(layer, center)
+
+    def _activate_local_cleanup_region(self, layer, coords: tuple[int, ...]) -> bool:
+        shape = self._layer_shape(layer)
+        if len(shape) < 2 or len(coords) < 2:
+            self._log("Local cleanup requires a 2D or 3D Labels layer.")
+            return False
+        y, x = int(coords[-2]), int(coords[-1])
+        height, width = int(shape[-2]), int(shape[-1])
+        region_height, region_width = self._local_region_size_pixels(shape)
+        y0, y1 = self._centered_bounds(y, region_height, height)
+        x0, x1 = self._centered_bounds(x, region_width, width)
+        if y1 <= y0 or x1 <= x0:
+            self._log("Local cleanup area is empty after clamping to the target mask.")
+            return False
+        if len(shape) >= 3:
+            self._set_combo_current_data(self.scope_combo, "current_slice")
+        self._set_manual_work_region_bounds(y0, y1, x0, x1)
+        self._last_local_cleanup_center = tuple(int(value) for value in coords)
+        pixels = int((y1 - y0) * (x1 - x0))
+        self.status_label.setText(f"Activated local cleanup area {y1 - y0} x {x1 - x0} px around click.")
+        self._log(
+            f"Activated local cleanup in {layer.name}: y={y0}:{y1}, x={x0}:{x1} "
+            f"({pixels:,} pixels). Click Analyze Layer to rebuild for this area."
+        )
+        return True
+
+    def _set_manual_work_region_bounds(self, y0: int, y1: int, x0: int, x1: int) -> None:
+        self._set_combo_current_data(self.work_region_combo, "manual")
+        for spin, value in (
+            (self.work_y0_spin, y0),
+            (self.work_y1_spin, y1),
+            (self.work_x0_spin, x0),
+            (self.work_x1_spin, x1),
+        ):
+            spin.blockSignals(True)
+            spin.setValue(int(value))
+            spin.blockSignals(False)
+        self._on_work_region_changed()
+
+    def _local_region_size_pixels(self, shape: tuple[int, ...]) -> tuple[int, int]:
+        height, width = int(shape[-2]), int(shape[-1])
+        percent = self._local_region_percent()
+        fraction = max(1, min(100, percent)) / 100.0
+        return max(1, int(round(height * fraction))), max(1, int(round(width * fraction)))
+
+    def _local_region_percent(self) -> int:
+        combo = getattr(self, "local_region_size_combo", None)
+        raw = combo.currentData() if combo is not None else None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return 5
+
+    def _centered_bounds(self, center: int, size: int, limit: int) -> tuple[int, int]:
+        size = max(1, min(int(size), int(limit)))
+        start = int(round(float(center) - float(size) / 2.0))
+        start = max(0, min(int(limit) - size, start))
+        return start, start + size
+
+    def _set_combo_current_data(self, combo: QComboBox, value: object) -> bool:
+        index = combo.findData(value)
+        if index < 0:
+            return False
+        combo.blockSignals(True)
+        combo.setCurrentIndex(index)
+        combo.blockSignals(False)
+        return True
+
+    def _viewer_center_data_coords(self, layer) -> tuple[int, ...] | None:
+        shape = self._layer_shape(layer)
+        if not shape:
+            return None
+        dims = getattr(self.viewer, "dims", None)
+        displayed = self._displayed_axes(dims, len(shape))
+        camera = getattr(self.viewer, "camera", None)
+        center = getattr(camera, "center", None) if camera is not None else None
+        coords: list[int | None] = [None] * len(shape)
+        if dims is not None:
+            current_step = getattr(dims, "current_step", ())
+            for axis in range(len(shape)):
+                if axis < len(current_step):
+                    coords[axis] = int(current_step[axis])
+        if center is None:
+            for axis in displayed:
+                if axis < len(shape):
+                    coords[axis] = int(shape[axis]) // 2
+        for axis, size in enumerate(shape):
+            if coords[axis] is None:
+                coords[axis] = int(size) // 2
+        if center is not None:
+            center_values = tuple(center)
+            if len(center_values) == len(displayed):
+                world = list(float(coords[axis]) for axis in range(len(shape)))
+                for value, axis in zip(center_values, displayed, strict=False):
+                    if axis < len(world):
+                        world[axis] = float(value)
+                try:
+                    data = layer.world_to_data(tuple(world))
+                except Exception:
+                    data = tuple(world)
+                coords = [int(round(float(value))) for value in data[-len(shape):]]
+        clamped = []
+        for coord, size in zip(coords, shape, strict=False):
+            clamped.append(max(0, min(int(size) - 1, int(coord))))
+        return tuple(clamped)
+
     def _scoped_data(self, layer) -> tuple[np.ndarray, object, tuple[int, ...]]:
         source = layer.data
         shape = self._layer_shape(layer)
@@ -2368,6 +2567,10 @@ class MaskCleanupTab(QWidget):
         return slice(y0, y1), slice(x0, x1)
 
     def _drawn_work_region_bounds(self, arr: np.ndarray) -> tuple[int, int, int, int] | None:
+        arr_shape = getattr(arr, "shape", None)
+        if arr_shape is None:
+            arr_shape = np.asarray(arr).shape
+        shape = tuple(int(value) for value in arr_shape)
         roi_layer = safe_get_layer(self.viewer, self.work_roi_combo.currentData())
         if roi_layer is None:
             return None
@@ -2379,6 +2582,8 @@ class MaskCleanupTab(QWidget):
         for vertices in data:
             points = np.asarray(vertices)
             if points.size == 0:
+                continue
+            if points.ndim == 0 or int(points.shape[-1]) < 2:
                 continue
             coord_count = min(int(points.shape[-1]), len(shape))
             coords = points[..., -coord_count:]
@@ -2532,22 +2737,23 @@ class MaskCleanupTab(QWidget):
         image_layer = safe_get_layer(self.viewer, self.source_image_combo.currentData())
         if image_layer is None:
             return None
-        image = np.asarray(image_layer.data)
-        labels = np.asarray(label_layer.data)
+        image_source = image_layer.data
+        label_shape = self._layer_shape(label_layer)
+        image_shape = self._layer_shape(image_layer)
         if indexer is Ellipsis:
-            return image
+            return np.asarray(image_source)
         if not isinstance(indexer, tuple):
-            return image
-        if image.shape == labels.shape:
-            return image[indexer]
-        if image.ndim == labels.ndim + 1 and image.shape[-1] in (3, 4) and image.shape[:-1] == labels.shape:
-            return image[indexer + (slice(None),)]
-        if image.ndim == labels.ndim + 1 and image.shape[0] in (3, 4) and image.shape[1:] == labels.shape:
-            return image[(slice(None),) + indexer]
-        scoped_shape = np.asarray(label_layer.data[indexer]).shape
-        if image.shape == scoped_shape:
-            return image
-        return image
+            return np.asarray(image_source)
+        if image_shape == label_shape:
+            return np.asarray(image_source[indexer])
+        if len(image_shape) == len(label_shape) + 1 and image_shape[-1] in (3, 4) and image_shape[:-1] == label_shape:
+            return np.asarray(image_source[indexer + (slice(None),)])
+        if len(image_shape) == len(label_shape) + 1 and image_shape[0] in (3, 4) and image_shape[1:] == label_shape:
+            return np.asarray(image_source[(slice(None),) + indexer])
+        scoped_shape = tuple(int(value) for value in label_layer.data[indexer].shape)
+        if image_shape == scoped_shape:
+            return np.asarray(image_source)
+        return np.asarray(image_source)
 
     def _replace_scoped_layer_data(
         self,
@@ -2656,8 +2862,7 @@ class MaskCleanupTab(QWidget):
         try:
             if isinstance(previous, tuple) and len(previous) == 3 and previous[0] == "region":
                 _tag, indexer, region = previous
-                data = np.asarray(layer.data)
-                data[indexer] = region
+                layer.data[indexer] = region
             else:
                 layer.data = previous
             layer.refresh()
@@ -2692,7 +2897,9 @@ class MaskCleanupTab(QWidget):
         return True
 
     def _push_undo_state(self, layer, action: str) -> None:
-        self._append_undo_state(layer, np.asarray(layer.data).copy(), action)
+        snapshot = self._snapshot_layer_data(layer)
+        if snapshot is not None:
+            self._append_undo_state(layer, snapshot, action)
 
     def _append_undo_state(self, layer, data: np.ndarray, action: str) -> None:
         history = self._undo_history.setdefault(id(layer), [])
@@ -2711,10 +2918,12 @@ class MaskCleanupTab(QWidget):
         self._update_undo_state()
 
     def _snapshot_layer_data(self, layer) -> np.ndarray | None:
-        data = np.asarray(layer.data)
-        if data.size > UNDO_FULL_SNAPSHOT_PIXEL_LIMIT:
+        shape = self._layer_shape(layer)
+        if self._is_lazy_layer_data(layer.data) or (
+            self._shape_pixel_count(shape) > UNDO_FULL_SNAPSHOT_PIXEL_LIMIT
+        ):
             return None
-        return data.copy()
+        return np.asarray(layer.data).copy()
 
     def _update_undo_state(self) -> None:
         if not hasattr(self, "undo_btn"):
@@ -2859,14 +3068,15 @@ class MaskCleanupTab(QWidget):
             pass
 
     def _label_value_near(self, layer, data_position: np.ndarray) -> int:
-        data = np.asarray(layer.data)
-        coords = tuple(int(round(float(value))) for value in data_position[-data.ndim :])
-        if len(coords) != data.ndim:
+        data = layer.data
+        shape = self._layer_shape(layer)
+        coords = tuple(int(round(float(value))) for value in data_position[-len(shape) :])
+        if len(coords) != len(shape):
             return 0
-        for coord, size in zip(coords, data.shape, strict=False):
+        for coord, size in zip(coords, shape, strict=False):
             if coord < 0 or coord >= size:
                 return 0
-        return int(data[coords])
+        return int(np.asarray(data[coords]))
 
     def _format_position(self, data_position: np.ndarray) -> str:
         return ", ".join(f"{float(value):.1f}" for value in data_position)

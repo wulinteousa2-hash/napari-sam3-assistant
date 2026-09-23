@@ -4,7 +4,12 @@ from typing import Any
 
 import numpy as np
 
-from ..core.coordinates import base_image_data, extract_2d_image, infer_image_selection
+from ..core.coordinates import (
+    RoiBounds,
+    base_image_data,
+    extract_2d_roi,
+    infer_image_selection,
+)
 from ..core.models import (
     BoxPrompt,
     ExemplarPrompt,
@@ -184,14 +189,15 @@ class PromptCollector:
         y1: float,
         x1: float,
     ) -> np.ndarray:
-        normalized = base_image_data(image_data)
-        image = extract_2d_image(normalized, selection)
-        height, width = image.shape[-2:]
+        y_axis, x_axis = selection.spatial_axes
+        height = int(selection.data_shape[y_axis])
+        width = int(selection.data_shape[x_axis])
         iy0 = max(0, min(height, int(np.floor(y0))))
         iy1 = max(iy0 + 1, min(height, int(np.ceil(y1))))
         ix0 = max(0, min(width, int(np.floor(x0))))
         ix1 = max(ix0 + 1, min(width, int(np.ceil(x1))))
-        return np.asarray(image[iy0:iy1, ix0:ix1])
+        bounds = RoiBounds(y0=iy0, x0=ix0, y1=iy1, x1=ix1)
+        return np.asarray(extract_2d_roi(image_data, selection, bounds))
 
     def _data_shape(self, data: Any) -> tuple[int, ...]:
         shape = getattr(data, "shape", None)

@@ -151,6 +151,193 @@ def test_huge_volume_guard_allows_current_slice_manual_roi():
     assert tab._selected_scope_shape(layer) == (256, 256)
 
 
+def test_drawn_work_region_slices_handles_large_mask_bounds_without_materializing():
+    import numpy as np
+
+    class Combo:
+        def __init__(self, value):
+            self.value = value
+
+        def currentData(self):
+            return self.value
+
+    roi_vertices = np.array(
+        [
+            [6071.215, 7336.469],
+            [6071.215, -317.58984],
+            [-209.04492, -317.58984],
+            [-209.04492, 7336.469],
+        ],
+        dtype=np.float32,
+    )
+    tab = MaskCleanupTab.__new__(MaskCleanupTab)
+    tab.work_region_combo = Combo("drawn")
+    tab.work_roi_combo = Combo("roi")
+    tab.viewer = SimpleNamespace(layers={"roi": SimpleNamespace(data=[roi_vertices])})
+
+    region = tab._work_region_slices(SimpleNamespace(shape=(16_384, 16_384)))
+
+    assert region == (slice(0, 6073), slice(0, 7338))
+
+
+def test_huge_volume_guard_allows_current_slice_drawn_roi():
+    import numpy as np
+
+    class Combo:
+        def __init__(self, value):
+            self.value = value
+
+        def currentData(self):
+            return self.value
+
+    roi_vertices = np.array([[10, 20], [10, 120], [90, 120], [90, 20]], dtype=np.float32)
+    tab = MaskCleanupTab.__new__(MaskCleanupTab)
+    tab.scope_combo = Combo("current_slice")
+    tab.work_region_combo = Combo("drawn")
+    tab.work_roi_combo = Combo("roi")
+    tab.viewer = SimpleNamespace(layers={"roi": SimpleNamespace(data=[roi_vertices])})
+    layer = SimpleNamespace(data=SimpleNamespace(shape=(500, 2500, 2500)))
+
+    assert tab._unsafe_huge_volume_scope_message(layer) is None
+    assert tab._selected_scope_shape(layer) == (81, 101)
+
+
+def test_activate_local_cleanup_region_sets_manual_roi_from_click_percent():
+    class Combo:
+        def __init__(self, value, options=None):
+            self.value = value
+            self.options = list(options or [value])
+            if value not in self.options:
+                self.options.append(value)
+            self.index = self.options.index(value)
+            self.blocked = False
+
+        def currentData(self):
+            return self.options[self.index]
+
+        def findData(self, value):
+            try:
+                return self.options.index(value)
+            except ValueError:
+                return -1
+
+        def setCurrentIndex(self, index):
+            self.index = int(index)
+
+        def currentIndex(self):
+            return self.index
+
+        def count(self):
+            return len(self.options)
+
+        def blockSignals(self, blocked):
+            self.blocked = bool(blocked)
+
+    class Spin:
+        def __init__(self):
+            self._value = 0
+
+        def value(self):
+            return self._value
+
+        def setValue(self, value):
+            self._value = int(value)
+
+        def blockSignals(self, _blocked):
+            pass
+
+    class Label:
+        def __init__(self):
+            self.text = ""
+
+        def setText(self, text):
+            self.text = text
+
+    tab = MaskCleanupTab.__new__(MaskCleanupTab)
+    tab.work_region_combo = Combo("full", ["full", "manual", "drawn"])
+    tab.scope_combo = Combo("whole_volume", ["current_slice", "z_range", "whole_volume"])
+    tab.local_region_size_combo = Combo(5, [5, 10, 20, 50])
+    tab.work_y0_spin = Spin()
+    tab.work_y1_spin = Spin()
+    tab.work_x0_spin = Spin()
+    tab.work_x1_spin = Spin()
+    tab.status_label = Label()
+    tab._log = lambda _message: None
+    tab._on_work_region_changed = lambda: None
+    layer = SimpleNamespace(name="mask", data=SimpleNamespace(shape=(16_384, 16_384)))
+
+    assert tab._activate_local_cleanup_region(layer, (10, 20)) is True
+
+    assert tab.work_region_combo.currentData() == "manual"
+    assert tab.scope_combo.currentData() == "whole_volume"
+    assert tab.work_y0_spin.value() == 0
+    assert tab.work_y1_spin.value() == 819
+    assert tab.work_x0_spin.value() == 0
+    assert tab.work_x1_spin.value() == 819
+    assert tab._last_local_cleanup_center == (10, 20)
+    assert "819 x 819" in tab.status_label.text
+
+
+def test_activate_local_cleanup_region_uses_current_slice_for_3d_masks():
+    class Combo:
+        def __init__(self, value, options):
+            self.options = list(options)
+            self.index = self.options.index(value)
+
+        def currentData(self):
+            return self.options[self.index]
+
+        def findData(self, value):
+            try:
+                return self.options.index(value)
+            except ValueError:
+                return -1
+
+        def setCurrentIndex(self, index):
+            self.index = int(index)
+
+        def blockSignals(self, _blocked):
+            pass
+
+    class Spin:
+        def __init__(self):
+            self._value = 0
+
+        def value(self):
+            return self._value
+
+        def setValue(self, value):
+            self._value = int(value)
+
+        def blockSignals(self, _blocked):
+            pass
+
+    class Label:
+        def setText(self, _text):
+            pass
+
+    tab = MaskCleanupTab.__new__(MaskCleanupTab)
+    tab.work_region_combo = Combo("full", ["full", "manual", "drawn"])
+    tab.scope_combo = Combo("whole_volume", ["current_slice", "z_range", "whole_volume"])
+    tab.local_region_size_combo = Combo(20, [5, 10, 20, 50])
+    tab.work_y0_spin = Spin()
+    tab.work_y1_spin = Spin()
+    tab.work_x0_spin = Spin()
+    tab.work_x1_spin = Spin()
+    tab.status_label = Label()
+    tab._log = lambda _message: None
+    tab._on_work_region_changed = lambda: None
+    layer = SimpleNamespace(name="mask", data=SimpleNamespace(shape=(10, 2500, 2500)))
+
+    assert tab._activate_local_cleanup_region(layer, (3, 1000, 1200)) is True
+
+    assert tab.scope_combo.currentData() == "current_slice"
+    assert tab.work_region_combo.currentData() == "manual"
+    assert tab.work_y0_spin.value() == 750
+    assert tab.work_y1_spin.value() == 1250
+    assert tab.work_x0_spin.value() == 950
+    assert tab.work_x1_spin.value() == 1450
+
 def test_ome_zarr_write_target_blocks_different_store_by_default(tmp_path):
     import pytest
 
