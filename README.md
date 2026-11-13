@@ -4,7 +4,7 @@
 
 ![napari-sam3-assistant UI](docs/ui.png)
 
-Latest version: `4.5.0`
+Latest version: `5.5.0`
 
 `napari-sam3-assistant` is a napari plugin for local Segment Anything Model 3
 (SAM3) segmentation. It provides:
@@ -282,7 +282,8 @@ download SAM3 weights.
 
 ## Citation
 
-If you use `napari-sam3-assistant` in your work, please cite the Zenodo archive for version `4.5.0`:
+Version `5.5.0` is available from [GitHub Releases](https://github.com/wulinteousa2-hash/napari-sam3-assistant/releases/tag/v5.5.0).
+The citation below refers specifically to the existing Zenodo archive for version `4.5.0`:
 
 Teo, Wulin. (2026). `napari-sam3-assistant` (Version 4.5.0) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.20367206
 
