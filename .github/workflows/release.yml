@@ -1,4 +1,4 @@
-name: Publish GitHub release
+name: Publish release to GitHub and PyPI
 
 on:
   push:
@@ -69,6 +69,12 @@ jobs:
           python -m pip install build twine
           python -m build
           python -m twine check dist/*
+      - name: Save validated distributions for PyPI
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-distributions
+          path: dist/*
+          if-no-files-found: error
       - name: Publish release and packages
         env:
           GH_TOKEN: ${{ github.token }}
@@ -81,3 +87,23 @@ jobs:
               --verify-tag --latest --title "$RELEASE_TAG" \
               --notes-file release-notes.md
           fi
+
+  pypi:
+    name: Publish to PyPI
+    needs: release
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/napari-sam3-assistant/
+    permissions:
+      id-token: write
+    steps:
+      - name: Retrieve validated distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: release-distributions
+          path: dist/
+      - name: Publish with PyPI Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
