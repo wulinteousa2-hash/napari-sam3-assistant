@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from napari_sam3_assistant.core.coordinates import RoiBounds, infer_image_selection
 from napari_sam3_assistant.core.models import (
@@ -239,6 +240,105 @@ def test_tile_outside_target_exemplar_keeps_context_and_small_box():
     assert prompt_box == BoxPrompt(y0=20.0, x0=30.0, y1=40.0, x1=50.0)
     assert prompt_box.y1 < 128
     assert prompt_box.x1 < 128
+
+
+def test_forced_reference_does_not_use_natural_path_when_tile_contains_box():
+    panel = AdvancedModePanel.__new__(AdvancedModePanel)
+    panel._cache_context_for_layer = lambda *_args, **_kwargs: {}
+    data = np.arange(20 * 24, dtype=np.uint16).reshape(20,24)
+    exemplar = ExemplarPrompt(roi=data[8:11,9:13],y0=8.,x0=9.,y1=11.,x1=13.)
+    bundle = PromptBundle(task=Sam3Task.EXEMPLAR,image=infer_image_selection('image',data.shape),exemplars=[exemplar])
+    bounds = RoiBounds(y0=5,x0=6,y1=15,x1=18)
+    class Recorder:
+        def run_image(self,image,prompt,*,cache_context=None):
+            self.image = np.asarray(image)
+            return Sam3Result(task=Sam3Task.EXEMPLAR,labels=np.zeros(self.image.shape,dtype=np.uint32))
+    recorder = Recorder()
+    _,labels,_,_ = panel._infer_tiled_exemplar_tile(recorder,SimpleNamespace(data=data),bundle,bounds,
+        exemplar.roi,target_exemplar=exemplar,force_reference=True)
+    assert recorder.image.shape[1] > bounds.width
+    np.testing.assert_array_equal(recorder.image[:bounds.height,-bounds.width:],data[5:15,6:18])
+    assert labels.shape == (bounds.height,bounds.width)
+
+
+def test_encoded_scan_keeps_target_pixels_and_uses_complete_native_reference():
+    panel=AdvancedModePanel.__new__(AdvancedModePanel)
+    panel._cache_context_for_layer=lambda *_args,**_kwargs:{}
+    data=np.arange(300*400,dtype=np.uint32).reshape(300,400)
+    ex=ExemplarPrompt(roi=data[100:120,100:140],y0=100.,x0=100.,y1=120.,x1=140.)
+    source=PromptBundle(task=Sam3Task.EXEMPLAR,image=infer_image_selection('image',data.shape),exemplars=[ex])
+    layer=SimpleNamespace(data=data)
+    class Adapter:
+        def encode_exemplar(self,image,prompt):
+            np.testing.assert_array_equal(image,data)
+            assert prompt.boxes[0]==BoxPrompt(y0=100.,x0=100.,y1=120.,x1=140.)
+            return 'encoded-source'
+        def run_image_with_exemplar(self,image,prompt,reference,**kwargs):
+            assert reference=='encoded-source'
+            np.testing.assert_array_equal(image,data[200:250,300:350])
+            return Sam3Result(task=Sam3Task.EXEMPLAR,labels=np.ones((50,50),dtype=np.uint32))
+    adapter=Adapter()
+    reference,bounds=panel._encode_scan_reference(adapter,layer,source,ex.roi,ex)
+    assert bounds==(0,0,300,400)
+    result,labels,_,_=panel._infer_tiled_exemplar_tile(adapter,layer,source,
+        RoiBounds(y0=200,x0=300,y1=250,x1=350),ex.roi,target_exemplar=ex,encoded_reference=reference)
+    assert labels.shape==(50,50)
+
+
+@pytest.mark.parametrize(
+    "box",
+    [
+        (100.763671875, 200.77734375, 867.419921875, 685.41015625),
+        (200.77734375, 100.763671875, 685.41015625, 867.419921875),
+        (0.0, 0.0, 767.0, 485.0),
+        (433.0, 915.0, 1200.0, 1400.0),
+    ],
+)
+def test_remote_tile_preserves_complete_large_exemplar_through_adapter(box):
+    panel = AdvancedModePanel.__new__(AdvancedModePanel)
+    panel._cache_context_for_layer = lambda *_args, **_kwargs: {}
+    image_data = np.arange(1200 * 1400, dtype=np.uint32).reshape(1200, 1400)
+    image_layer = SimpleNamespace(name="image", data=image_data)
+    y0, x0, y1, x1 = box
+    iy0, ix0 = int(np.floor(y0)), int(np.floor(x0))
+    iy1, ix1 = int(np.ceil(y1)), int(np.ceil(x1))
+    exemplar = ExemplarPrompt(
+        roi=image_data[iy0:iy1, ix0:ix1], y0=y0, x0=x0, y1=y1, x1=x1
+    )
+    bundle = PromptBundle(
+        task=Sam3Task.EXEMPLAR,
+        image=infer_image_selection("image", image_data.shape),
+        exemplars=[exemplar],
+    )
+    bounds = RoiBounds(y0=1000, x0=1000, y1=1128, x1=1128)
+
+    class RecordingAdapter:
+        def run_image(self, image, prompt_bundle, *, cache_context=None):
+            self.image = np.asarray(image)
+            self.box = prompt_bundle.boxes[0]
+            return Sam3Result(
+                task=Sam3Task.EXEMPLAR,
+                labels=np.zeros(self.image.shape[:2], dtype=np.uint32),
+            )
+
+    adapter = RecordingAdapter()
+    _, labels, _, _ = panel._infer_tiled_exemplar_tile(
+        adapter, image_layer, bundle, bounds, exemplar.roi,
+        target_exemplar=exemplar,
+    )
+
+    # Fractional prompt coordinates must survive translation without clipping.
+    assert adapter.box.y1 - adapter.box.y0 == pytest.approx(y1 - y0)
+    assert adapter.box.x1 - adapter.box.x0 == pytest.approx(x1 - x0)
+    py0, px0 = int(np.floor(adapter.box.y0)), int(np.floor(adapter.box.x0))
+    py1, px1 = int(np.ceil(adapter.box.y1)), int(np.ceil(adapter.box.x1))
+    np.testing.assert_array_equal(
+        adapter.image[py0:py1, px0:px1], exemplar.roi
+    )
+    # A reference larger than this target tile must not truncate either input
+    # or change the decoded target region's dimensions.
+    np.testing.assert_array_equal(adapter.image[:128, -128:], image_data[1000:1128, 1000:1128])
+    assert labels.shape == (128, 128)
 
 
 def test_current_roi_and_full_scan_tile_use_identical_adapter_inputs():

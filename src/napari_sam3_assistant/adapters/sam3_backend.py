@@ -8,6 +8,7 @@ import inspect
 import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import RLock
 from typing import Any, Iterator
 
 import numpy as np
@@ -44,6 +45,16 @@ class Sam3AdapterConfig:
     load_from_hf: bool = False
 
 
+@dataclass(frozen=True)
+class EncodedExemplar:
+    features: torch.Tensor
+    mask: torch.Tensor
+    owner: int
+    generation: object
+    config: Sam3AdapterConfig
+    reference_hw: tuple[int, int]
+
+
 class Sam3Adapter:
     """Narrow plugin-facing adapter around the local SAM3 package."""
 
@@ -58,8 +69,15 @@ class Sam3Adapter:
         self.video_session: Sam3Session | None = None
         self._temp_video_dir: TemporaryDirectory[str] | None = None
         self._dtype_hook_handles: list[Any] = []
+        self._image_lock = RLock()
+        self._reference_generation = object()
 
     def load_image(self, *, enable_instance_interactivity: bool = False) -> None:
+        with self._image_lock:
+            self._load_image(enable_instance_interactivity=enable_instance_interactivity)
+
+    def _load_image(self, *, enable_instance_interactivity: bool = False) -> None:
+        self._reference_generation = object()
         from sam3.model.sam3_image_processor import Sam3Processor
         from sam3.model_builder import build_sam3_image_model
 
@@ -132,6 +150,11 @@ class Sam3Adapter:
         self._install_video_backend_compatibility()
 
     def unload(self) -> None:
+        with self._image_lock:
+            self._unload()
+
+    def _unload(self) -> None:
+        self._reference_generation = object()
         self._remove_dtype_hooks()
         self.image_model = None
         self.image_processor = None
@@ -149,6 +172,13 @@ class Sam3Adapter:
         image_data: np.ndarray,
         bundle: PromptBundle,
         *,
+        cache_context: dict[str, Any] | None = None,
+    ) -> Sam3Result:
+        with self._image_lock:
+            return self._run_image(image_data, bundle, cache_context=cache_context)
+
+    def _run_image(
+        self, image_data: np.ndarray, bundle: PromptBundle, *,
         cache_context: dict[str, Any] | None = None,
     ) -> Sam3Result:
         use_box_instance_prompts = self._uses_2d_box_instance_prompts(bundle)
@@ -190,6 +220,102 @@ class Sam3Adapter:
 
         self.image_state = state
         return self._result_from_image_state(bundle, state)
+
+    @torch.inference_mode()
+    def encode_exemplar(self, image_data: np.ndarray, bundle: PromptBundle) -> EncodedExemplar:
+        """Encode visual box features in their natural scene, once per scan.
+
+        No candidate masks are projected or retained while encoding the source.
+        References are adapter/model scoped and invalid after reload or unload.
+        """
+        if bundle.task != Sam3Task.EXEMPLAR or not bundle.boxes or bundle.points or bundle.masks or bundle.text:
+            raise ValueError("Encoded exemplars require visual boxes without text, points or masks.")
+        with self._image_lock:
+            if self.image_processor is None:
+                self.load_image()
+            model = self.image_model
+            if not all(hasattr(model, key) for key in ("geometry_encoder", "_get_dummy_prompt", "_get_img_feats")):
+                raise RuntimeError("This SAM3 backend does not support encoded visual references.")
+            rgb = to_rgb_uint8(extract_2d_image(image_data, bundle.image))
+            mapper = CoordinateMapper(bundle.image)
+            with self._inference_context():
+                state = self._initial_state_for_image(rgb, bundle)
+                geometry = model._get_dummy_prompt()
+                for box in bundle.boxes:
+                    values = mapper.box_to_normalized_cxcywh(box, rgb.shape[:2])
+                    geometry.append_boxes(
+                        torch.tensor(values, device=self.image_processor.device, dtype=torch.float32).view(1, 1, 4),
+                        torch.tensor([box.polarity == PromptPolarity.POSITIVE], device=self.image_processor.device, dtype=torch.bool).view(1, 1),
+                    )
+                _, features, positions, sizes = model._get_img_feats(state["backbone_out"], self.image_processor.find_stage.img_ids)
+                encoded, mask = model.geometry_encoder(geo_prompt=geometry, img_feats=features,
+                                                       img_sizes=sizes, img_pos_embeds=positions)
+            self.image_state = None
+            return EncodedExemplar(encoded.detach().clone(), mask.detach().clone(), id(self),
+                                   self._reference_generation, copy.deepcopy(self.config), tuple(rgb.shape[:2]))
+
+    @torch.inference_mode()
+    def run_image_with_exemplar(
+        self, image_data: np.ndarray, bundle: PromptBundle, reference: EncodedExemplar, *,
+        cache_context: dict[str, Any] | None = None,
+    ) -> Sam3Result:
+        """Apply a captured native prompt to untouched target pixels.
+
+        The geometry hook is scoped to this locked forward pass and always
+        removed. Full-resolution masks are projected one at a time to avoid
+        allocating N full-tile probability masks on large images.
+        """
+        if bundle.task != Sam3Task.EXEMPLAR:
+            raise ValueError("Encoded references are only supported for exemplar image segmentation.")
+        with self._image_lock:
+            if (reference.owner != id(self) or reference.generation is not self._reference_generation
+                    or reference.config != self.config or self.image_model is None or self.image_processor is None):
+                raise RuntimeError("Encoded reference is stale; encode the exemplar again after changing or reloading the model.")
+            frame = extract_2d_image(image_data, bundle.image)
+            hw = tuple(frame.shape[:2])
+            if frame.size and np.min(frame) == np.max(frame):
+                return Sam3Result(task=bundle.task, labels=np.zeros(hw, dtype=np.uint32),
+                    boxes_xyxy=np.zeros((0, 4), dtype=np.float32), scores=np.zeros(0, dtype=np.float32),
+                    object_ids=np.zeros(0, dtype=np.int64),
+                    metadata={"encoded_exemplar":True,"skipped_uniform_tile":True})
+            rgb = to_rgb_uint8(frame)
+            with self._inference_context():
+                state = self._initial_state_for_image(rgb, bundle, cache_context=cache_context)
+                state["backbone_out"].update(self.image_model.backbone.forward_text(["visual"], device=self.image_processor.device))
+                self._normalize_state_tensors(state)
+                handle = self.image_model.geometry_encoder.register_forward_hook(
+                    lambda _module, _args, _output: (reference.features, reference.mask))
+                try:
+                    outputs = self.image_model.forward_grounding(
+                        backbone_out=state["backbone_out"], find_input=self.image_processor.find_stage,
+                        find_target=None, geometric_prompt=self.image_model._get_dummy_prompt())
+                finally:
+                    handle.remove()
+                result = self._decode_encoded_tile(outputs, hw, bundle)
+            self.image_state = state
+            result.metadata.update(encoded_exemplar=True, reference_hw=reference.reference_hw,
+                                   text_threshold_used=self.config.confidence_threshold)
+            return result
+
+    def _decode_encoded_tile(self, outputs, hw, bundle):
+        from sam3.model import box_ops
+        from sam3.model.data_misc import interpolate
+
+        probabilities = (outputs["pred_logits"].sigmoid()
+                         * outputs["presence_logit_dec"].sigmoid().unsqueeze(1)).squeeze(-1)
+        keep = probabilities > self.config.confidence_threshold
+        scores = probabilities[keep]
+        masks = outputs["pred_masks"][keep]
+        boxes = box_ops.box_cxcywh_to_xyxy(outputs["pred_boxes"][keep])
+        boxes = boxes * torch.tensor([hw[1],hw[0],hw[1],hw[0]], device=boxes.device)
+        labels = np.zeros(hw, dtype=np.uint32)
+        for index in range(len(masks)):
+            projected = interpolate(masks[index:index+1].unsqueeze(1), hw,
+                                    mode="bilinear", align_corners=False).sigmoid() > .5
+            labels[self._to_numpy(projected[0,0]).astype(bool)] = index+1
+        return Sam3Result(task=bundle.task, frame_index=bundle.image.frame_index,
+            labels=labels, boxes_xyxy=self._to_numpy(boxes), scores=self._to_numpy(scores),
+            object_ids=np.arange(1,len(masks)+1))
 
     def _initial_state_for_image(
         self,

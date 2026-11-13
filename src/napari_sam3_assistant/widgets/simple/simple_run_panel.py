@@ -118,15 +118,16 @@ class SimpleRunPanel(QGroupBox):
         else:
             self.run_btn.setText("Run")
         self.run_btn.setToolTip(
-            "Preview the actual scan-grid tile nearest the exemplar. The combined scan may "
-            "still differ where overlapping tiles are composed."
+            "Preview the scan-grid tile nearest the exemplar using the original ROI path. "
+            "Full-image scans use encoded source features and can produce different masks."
             if task == Sam3Task.EXEMPLAR
             else "Run the selected task and write preview layers."
         )
         self.scan_full_btn.setVisible(task == Sam3Task.EXEMPLAR)
         self.scan_full_btn.setEnabled(task == Sam3Task.EXEMPLAR and self.controller.large_image_enabled())
         self.scan_full_btn.setToolTip(
-            "Scan the full target image by tiles. Enable local/tiled inference in Exemplar first."
+            "Encode the source exemplar once and reuse its features on untouched target tiles. "
+            "Enable local/tiled inference in Exemplar first."
         )
         self.propagate_btn.setVisible(task == Sam3Task.SEGMENT_3D)
         self.propagate_btn.setEnabled(task == Sam3Task.SEGMENT_3D and has_session)

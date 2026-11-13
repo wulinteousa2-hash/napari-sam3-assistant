@@ -1,10 +1,13 @@
 from __future__ import annotations
 import csv
-from dataclasses import replace
+from dataclasses import asdict, replace
+import copy
 import gc
+import hashlib
 from pathlib import Path
 import re
 import time
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -748,10 +751,9 @@ class AdvancedModePanel(QWidget):
         self.large_image_check = QCheckBox("Enable tiled inference")
         self.large_image_check.setChecked(False)
         self.large_image_check.setToolTip(
-            "Process images tile by tile using the current prompt. Run Current ROI Only uses "
-            "one actual scan-grid tile and the same inference path as the full scan. A tile that "
-            "contains the exemplar keeps its natural pixels and box; other tiles receive a "
-            "contextual reference."
+            "Full-image, folder and Z-stack scans encode the source exemplar once and reuse "
+            "those features on untouched tiles. Run Current ROI Only keeps the existing "
+            "natural-box/pasted-reference preview for comparison."
         )
         self.large_image_check.toggled.connect(self._on_large_image_mode_changed)
 
@@ -1029,11 +1031,16 @@ class AdvancedModePanel(QWidget):
         self.batch_local_exemplar_btn = QPushButton("Scan Full Image by Tiles")
         self.batch_local_exemplar_btn.setObjectName("runButton")
         self.batch_local_exemplar_btn.setToolTip(
-            "For 2D exemplar segmentation with large-image mode: scan every tile in "
-            "the full image using the current exemplar box, then compose one full-size mask."
+            "Encode the source exemplar once, reuse its features on every untouched target "
+            "tile, then compose one full-size mask."
         )
         self.batch_local_exemplar_btn.clicked.connect(self._run_batch_local_exemplar_task)
         self.batch_local_exemplar_btn.setVisible(False)
+
+        self.batch_experiment_btn = QPushButton("Batch Experiment")
+        self.batch_experiment_btn.setToolTip("Compare ROI sizes with fixed settings and separate saved results.")
+        self.batch_experiment_btn.clicked.connect(self._open_batch_experiment)
+        self.batch_experiment_btn.setVisible(False)
 
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setObjectName("cancelButton")
@@ -1046,11 +1053,15 @@ class AdvancedModePanel(QWidget):
         row.addWidget(self.run_btn)
         row.addWidget(self.propagate_btn)
         row.addWidget(self.batch_local_exemplar_btn)
-        row.addWidget(clear_preview_btn)
-        row.addWidget(cancel_btn)
+        row.addWidget(self.batch_experiment_btn)
+        preview_actions = QHBoxLayout()
+        preview_actions.addStretch()
+        preview_actions.addWidget(clear_preview_btn)
+        preview_actions.addWidget(cancel_btn)
 
         layout.addWidget(self.live_refinement_status_label)
         layout.addLayout(row)
+        layout.addLayout(preview_actions)
         layout.addWidget(self._build_folder_batch_group())
         layout.addWidget(self._build_preview_output_group())
         group.setLayout(layout)
@@ -1492,9 +1503,8 @@ class AdvancedModePanel(QWidget):
             if self._current_task() == Sam3Task.EXEMPLAR and self._large_image_mode_enabled():
                 self.run_btn.setText("Run Current ROI Only")
                 self.run_btn.setToolTip(
-                    "Preview the actual scan-grid tile nearest the exemplar using the same "
-                    "inference path as the full scan. Overlap composition can still change the "
-                    "combined scan."
+                    "Keep the original ROI preview as a baseline. Full-image scans instead "
+                    "reuse an encoded native exemplar on untouched tiles."
                 )
             else:
                 self.run_btn.setText("Run Preview")
@@ -1511,30 +1521,35 @@ class AdvancedModePanel(QWidget):
             if self._folder_batch_enabled():
                 self.batch_local_exemplar_btn.setText("Run Folder Batch")
                 self.batch_local_exemplar_btn.setToolTip(
-                    "Apply the current exemplar to files in the input folder and write masks to disk."
+                    "Encode the source exemplar once for all folder files and slices, "
+                    "scan untouched target tiles, and write masks to disk."
                 )
             elif self._z_stack_tiled_scan_enabled():
                 self.batch_local_exemplar_btn.setText("Scan Z Stack by Tiles")
                 self.batch_local_exemplar_btn.setToolTip(
-                    "Repeat tiled exemplar scanning through all Z/frame slices and write "
-                    "mask chunks directly to OME-Zarr."
+                    "Reuse the exemplar encoded from the selected source slice across all "
+                    "Z/frame slices and write mask chunks directly to OME-Zarr."
                 )
             elif self._external_exemplar_source_enabled():
                 self.batch_local_exemplar_btn.setText("Scan Target Image by Tiles")
                 self.batch_local_exemplar_btn.setToolTip(
-                    "Scan the selected target image by tiles using a separate crop image "
-                    "as the visual exemplar source."
+                    "Encode the separate crop image once and reuse its features on "
+                    "untouched target tiles."
                 )
             else:
                 self.batch_local_exemplar_btn.setText("Scan Full Image by Tiles")
                 self.batch_local_exemplar_btn.setToolTip(
-                    "For 2D exemplar segmentation with large-image mode: scan every tile in "
-                    "the full image using the current exemplar box, then compose one full-size mask."
+                    "Encode the source exemplar once, reuse its features on every untouched "
+                    "target tile, then compose one full-size mask."
                 )
             self.batch_local_exemplar_btn.setVisible(
                 self._current_task() == Sam3Task.EXEMPLAR and self._large_image_mode_enabled()
             )
             self.batch_local_exemplar_btn.setEnabled(enabled)
+        if hasattr(self, "batch_experiment_btn"):
+            # Saved experiments can be inspected independently of task setup.
+            self.batch_experiment_btn.setVisible(True)
+            self.batch_experiment_btn.setEnabled(not running)
         self._sync_folder_batch_controls()
         self._sync_preview_output_controls()
 
@@ -1991,12 +2006,199 @@ class AdvancedModePanel(QWidget):
             f"y={bounds.y0}:{bounds.y1}, x={bounds.x0}:{bounds.x1}."
         )
         self._log(
-            "This isolated tile uses the same model-input rules as Scan Full Image. "
-            "Tiles containing the exemplar use the natural tile and localized box; other tiles "
-            "use a context-preserving reference. "
-            "The combined full-image result can still differ in overlap regions because earlier "
-            "tiles take precedence and optional seam merging runs after composition."
+            "This ROI preview retains the original natural-box/pasted-reference behavior. "
+            "Full-image scans reuse an encoded native exemplar instead. "
+            "Earlier tiles take precedence in overlaps; seam merging is a separate step."
         )
+
+    def _prepare_batch_experiment(self, *, encoded_only: bool = False) -> dict:
+        from ... import __version__
+
+        if self.viewer is None:
+            raise RuntimeError("Open a viewer and select an image before starting a new batch.")
+        if self._current_task() != Sam3Task.EXEMPLAR or not self._large_image_mode_enabled():
+            raise RuntimeError("Choose Exemplar segmentation and enable tiled inference before starting a new batch.")
+        try:
+            bundle = copy.deepcopy(self._collect_bundle_for_tiled_exemplar())
+            patch, source_name = self._collect_tiled_exemplar_patch(bundle)
+            patch = np.array(patch, copy=True)
+            external = self._external_exemplar_source_enabled()
+            target = bundle.exemplars[0] if bundle.exemplars and not external else None
+            image_layer = self.viewer.layers[bundle.image.layer_name]
+            image_hw = self._selection_image_hw(bundle.image)
+            config = copy.deepcopy(self._adapter_config())
+            cpu_error = self._cpu_bundle_support_error(bundle)
+            if cpu_error:
+                raise RuntimeError(cpu_error)
+            minimum_size = 1 if encoded_only else max(patch.shape[:2])
+            if minimum_size > 8192:
+                raise RuntimeError("The exemplar is larger than the supported experiment ROI sizes.")
+            transform = {"scale": list(image_layer.scale[-2:]), "translate": list(image_layer.translate[-2:])}
+            if image_layer.ndim == 2:
+                transform.update(rotate=np.asarray(image_layer.rotate).tolist(),
+                                 shear=np.asarray(image_layer.shear).tolist(),
+                                 affine=np.asarray(image_layer.affine.affine_matrix).tolist())
+            constants = {
+                "image_layer": image_layer.name, "image_hw": image_hw,
+                "image_selection": asdict(bundle.image), "source_transform": transform,
+                "threshold": config.confidence_threshold,
+                "overlap_percent": int(self.tile_overlap_spin.value()),
+                "merge_seams": bool(self.merge_tile_seams_check.isChecked()),
+                "minimum_size": minimum_size, "exemplar_source": source_name,
+                "external_exemplar": external,
+                "exemplar_box_yxyx": None if target is None else [target.y0,target.x0,target.y1,target.x1],
+                "adapter_config": asdict(config), "plugin_version": __version__,
+                "torch_version": torch.__version__,
+                "source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            }
+            counts = {size: len(self._tile_bounds_for_image(image_hw,(size,size),constants['overlap_percent']/100.))
+                      for size in (512,1024,2048,4096,8192)}
+        except Exception as exc:
+            raise RuntimeError(f"Cannot start a new batch: {exc}") from exc
+        return dict(bundle=bundle,patch=patch,target=target,image_layer=image_layer,
+                    image_hw=image_hw,config=config,constants=constants,counts=counts)
+
+    def _open_batch_experiment(self) -> None:
+        from ..experiment_dialog import BatchExperimentDialog
+
+        if self._worker is not None:
+            return
+        # Opening the browser must not collect prompts or validate a model.
+        name = self._current_image_layer_name() or 'No target selected'
+        threshold = getattr(self, 'confidence_threshold_spin', None)
+        constants = {'image_layer':name,'threshold':float(threshold.value()) if threshold is not None else .5,
+                     'overlap_percent':int(self.tile_overlap_spin.value()),
+                     'merge_seams':bool(self.merge_tile_seams_check.isChecked()),'minimum_size':1}
+        counts = {size:None for size in (512,1024,2048,4096,8192)}
+        try:
+            layer = self.viewer.layers[name]
+            base = self._base_layer_data(layer.data)
+            channel = getattr(self, 'channel_axis_spin', None)
+            axis = int(channel.value()) if channel is not None else -1
+            selection = infer_image_selection(name,tuple(base.shape),channel_axis=None if axis<0 else axis)
+            shape = self._selection_image_hw(selection)
+            counts = {size:len(self._tile_bounds_for_image(shape,(size,size),constants['overlap_percent']/100.)) for size in counts}
+        except (AttributeError,KeyError,ValueError,TypeError):
+            pass
+
+        def start(plan, folder, cancel, dialog):
+            from ...experiments import blocks, check_cancel, ExperimentCancelled, run_experiment, write_json
+            import zarr
+
+            prepared = self._prepare_batch_experiment(encoded_only=plan.modes == ('encoded',))
+            bundle,patch,target = prepared['bundle'],prepared['patch'],prepared['target']
+            image_layer,image_hw = prepared['image_layer'],prepared['image_hw']
+            config,constants = prepared['config'],prepared['constants']
+            dialog.set_source_context(constants,prepared['counts'])
+            if any(size<constants['minimum_size'] for size in plan.sizes):
+                raise RuntimeError('A selected ROI size is smaller than the complete exemplar. Choose larger ROI sizes.')
+            # Reuse the loaded adapter only when its captured configuration matches.
+            adapter = self._ensure_adapter()
+            if adapter.config != config:
+                raise RuntimeError("Model settings changed; reopen Batch Experiment.")
+
+            @thread_worker
+            def work():
+                try:
+                    folder.mkdir(parents=True, exist_ok=False)
+                    dialog.progress.emit("Copying the fixed source image…")
+                    first = extract_2d_roi(image_layer.data,bundle.image,
+                                           RoiBounds(y0=0,x0=0,y1=min(1024,image_hw[0]),x1=min(1024,image_hw[1])))
+                    snapshot_shape = (*image_hw,*first.shape[2:])
+                    snapshot_group = zarr.open_group(str(folder/'source.zarr'),mode='w')
+                    snapshot = snapshot_group.create_array('image',shape=snapshot_shape,
+                        chunks=(1024,1024,*first.shape[2:]),dtype=first.dtype)
+                    fingerprint = hashlib.sha256()
+                    for ys,xs in blocks(image_hw):
+                        check_cancel(cancel)
+                        data = extract_2d_roi(image_layer.data,bundle.image,
+                            RoiBounds(y0=ys.start,x0=xs.start,y1=ys.stop,x1=xs.stop))
+                        snapshot[ys,xs] = data
+                        fingerprint.update(np.ascontiguousarray(data).tobytes())
+                    fixed = copy.deepcopy(constants)
+                    fixed['source_snapshot_sha256_chunk_order'] = fingerprint.hexdigest()
+                    np.save(folder/'exemplar.npy',patch)
+                    frozen_bundle = replace(bundle,image=infer_image_selection(bundle.image.layer_name,snapshot_shape))
+                    frozen_layer = SimpleNamespace(name=bundle.image.layer_name,data=snapshot)
+                    self._ensure_image_adapter_loaded_for_bundle(adapter,frozen_bundle)
+                    encoded_reference = None
+                    reference_bounds = None
+
+                    def infer(bounds,mode):
+                        nonlocal encoded_reference, reference_bounds
+                        check_cancel(cancel)
+                        if adapter.config != config:
+                            raise RuntimeError("Adapter configuration changed during the experiment.")
+                        seen = {}
+                        class Recorder:
+                            def run_image(recorder,canvas,prompt,*,cache_context=None):
+                                seen['canvas_shape'] = list(canvas.shape)
+                                box = prompt.boxes[0]
+                                seen['prompt_box_yxyx'] = [box.y0,box.x0,box.y1,box.x1]
+                                return adapter.run_image(canvas,prompt,cache_context=cache_context)
+                            def run_image_with_exemplar(recorder,canvas,prompt,reference,*,cache_context=None):
+                                seen['canvas_shape'] = list(canvas.shape)
+                                seen['prompt_box_yxyx'] = None
+                                seen['reference_bounds_yxyx'] = reference_bounds
+                                return adapter.run_image_with_exemplar(canvas,prompt,reference,cache_context=cache_context)
+                        if mode == 'encoded' and encoded_reference is None:
+                            dialog.progress.emit("Encoding the native 8k exemplar once for this experiment…")
+                            encoded_reference,reference_bounds = self._encode_scan_reference(
+                                adapter,frozen_layer,frozen_bundle,patch,target,
+                                overlap_fraction=plan.overlap)
+                        raw,labels,boxes,scores = self._infer_tiled_exemplar_tile(
+                            Recorder(),frozen_layer,frozen_bundle,bounds,patch,
+                            target_exemplar=target,force_reference=mode == 'reference',
+                            encoded_reference=encoded_reference if mode == 'encoded' else None)
+                        seen['raw_candidates'] = len(raw.object_ids) if raw.object_ids is not None else 0
+                        seen['skipped_uniform_tile'] = bool(raw.metadata.get('skipped_uniform_tile'))
+                        path = 'encoded' if mode == 'encoded' else ('natural' if mode == 'current' and target is not None and self._bounds_contain_exemplar(bounds,target) else 'reference')
+                        return labels,boxes,scores,path,seen
+
+                    def compose(existing,labels,next_id):
+                        return self._compose_tile_labels(existing,labels,
+                            RoiBounds(y0=0,x0=0,y1=labels.shape[0],x1=labels.shape[1]),next_id)
+                    return run_experiment(folder=folder,plan=plan,shape=image_hw,constants=fixed,
+                        tile_plan=self._tile_bounds_for_image,infer=infer,compose=compose,
+                        vertical_pairs=self._vertical_seam_label_pairs,horizontal_pairs=self._horizontal_seam_label_pairs,
+                        cancel=cancel,progress=dialog.progress.emit)
+                except Exception as exc:
+                    result = {'format':'sam3-batch-experiment-v1',
+                              'status':'cancelled' if isinstance(exc,ExperimentCancelled) else 'failed',
+                              'error':str(exc),'constants':constants,'plan':asdict(plan),'runs':[]}
+                    write_json(folder/'experiment.json',result)
+                    return result
+
+            worker = work()
+            worker.returned.connect(dialog.finish)
+            worker.errored.connect(lambda exc: dialog.finish({'status':'failed','error':str(exc),'runs':[]}))
+            self._start_worker(worker,activity_status="Batch experiment running…")
+            self._batch_experiment_cancel = cancel
+            self._log(f"Batch experiment outputs: {folder}")
+
+        dialog = BatchExperimentDialog(self,constants=constants,minimum_size=1,tile_counts=counts,start=start)
+        self._batch_experiment_dialog = dialog
+
+        def load(run,stage):
+            import zarr
+            try:
+                group = zarr.open_group(str(dialog.folder/run[stage]),mode='r')
+                levels = [group[item['path']] for item in group.attrs['multiscales'][0]['datasets']]
+                name = f"Experiment {dialog.folder.name} — {run['name']} — {'final' if stage == 'final_path' else 'before merge'}"
+                for layer in self.viewer.layers:
+                    if layer.metadata.get('sam3_experiment') == str(dialog.folder):
+                        layer.visible = False
+                if name in self.viewer.layers:
+                    self.viewer.layers[name].visible = True
+                else:
+                    self.viewer.add_labels(levels if len(levels)>1 else levels[0],name=name,
+                        multiscale=len(levels)>1,metadata={'sam3_experiment':str(dialog.folder),'run':run},
+                        **dialog.result_constants.get('source_transform',{}))
+                self._log(f"Loaded {name}. The viewer position is shared across experiment results.")
+            except Exception as exc:
+                dialog.status.setText(f"Cannot load result: {exc}")
+        dialog.load_requested.connect(load)
+        dialog.exec()
 
     def _run_batch_local_exemplar_task(self) -> None:
         self.activity_status.set_starting_task()
@@ -2044,12 +2246,6 @@ class AdvancedModePanel(QWidget):
                     raise RuntimeError(cpu_error)
                 image_layer = self.viewer.layers[bundle.image.layer_name]
                 image_hw = self._selection_image_hw(bundle.image)
-                exemplar_hw = tuple(int(value) for value in np.asarray(exemplar).shape[:2])
-                if exemplar_hw[0] > roi_hw[0] or exemplar_hw[1] > roi_hw[1]:
-                    raise RuntimeError(
-                        "The exemplar crop is larger than the tile size. "
-                        "Select a smaller crop or increase ROI size."
-                    )
                 tiles = self._tile_bounds_for_image(image_hw, roi_hw, overlap_fraction)
                 if not tiles:
                     raise RuntimeError(f"No tiles were generated for image layer '{layer_name}'.")
@@ -2098,6 +2294,10 @@ class AdvancedModePanel(QWidget):
                 target_exemplar = job["target_exemplar"]
                 tiles = job["tiles"]
                 self._ensure_image_adapter_loaded_for_bundle(adapter, bundle)
+                yield "Encoding the exemplar in its native 8k source context…"
+                encoded_reference, reference_bounds = self._encode_scan_reference(
+                    adapter,image_layer,bundle,exemplar,target_exemplar,
+                    overlap_fraction=overlap_fraction)
                 composed = np.zeros(image_hw, dtype=np.uint32)
                 composed_boxes: list[np.ndarray] = []
                 composed_scores: list[np.ndarray] = []
@@ -2109,13 +2309,12 @@ class AdvancedModePanel(QWidget):
                         f"'{bundle.image.layer_name}' tile {tile_index}/{total_tiles}: "
                         f"y={bounds.y0}:{bounds.y1}, x={bounds.x0}:{bounds.x1}"
                     )
-                    _result, local_labels, local_boxes, local_scores = self._infer_tiled_exemplar_tile(
+                    _result, local_labels, local_boxes, local_scores = self._infer_encoded_exemplar_tile(
                         adapter,
                         image_layer,
                         bundle,
                         bounds,
-                        exemplar,
-                        target_exemplar=target_exemplar,
+                        encoded_reference=encoded_reference,
                     )
                     if local_boxes.size:
                         global_boxes = local_boxes.copy()
@@ -2157,6 +2356,9 @@ class AdvancedModePanel(QWidget):
                         "image_layer": bundle.image.layer_name,
                         "large_image_mode": True,
                         "large_image_tiled_scan": True,
+                        "tile_prompting": "encoded_native_reference",
+                        "reference_bounds_yxyx": reference_bounds,
+                        "reference_hw": encoded_reference.reference_hw,
                         "large_image_hw": image_hw,
                         "tile_count": total_tiles,
                         "tile_size": roi_hw,
@@ -2239,8 +2441,11 @@ class AdvancedModePanel(QWidget):
             reference_bundle = self._collect_bundle_for_tiled_exemplar()
             if self._external_exemplar_source_enabled():
                 exemplar, exemplar_source_name = self._collect_external_exemplar_patch()
+                target_exemplar = None
             else:
                 exemplar, exemplar_source_name = self._collect_tiled_exemplar_patch(reference_bundle)
+                target_exemplar = reference_bundle.exemplars[0] if reference_bundle.exemplars else None
+            reference_layer = self.viewer.layers[reference_bundle.image.layer_name]
             cpu_error = self._cpu_bundle_support_error(reference_bundle)
             if cpu_error:
                 raise RuntimeError(cpu_error)
@@ -2255,6 +2460,11 @@ class AdvancedModePanel(QWidget):
         @thread_worker
         def run_folder_batch():
             self._ensure_image_adapter_loaded_for_bundle(adapter, reference_bundle)
+            yield "Encoding the exemplar once for all folder images and slices…"
+            encoded_reference, _reference_bounds = self._encode_scan_reference(
+                adapter, reference_layer, reference_bundle, exemplar, target_exemplar,
+                overlap_fraction=overlap_fraction,
+            )
             total_files = len(image_files)
             written_paths: list[str] = []
             for file_index, image_path in enumerate(image_files, start=1):
@@ -2266,7 +2476,7 @@ class AdvancedModePanel(QWidget):
                 labels = self._segment_folder_batch_image(
                     image,
                     reference_bundle,
-                    np.asarray(exemplar),
+                    encoded_reference,
                     adapter,
                     roi_hw,
                     overlap_fraction,
@@ -2322,7 +2532,7 @@ class AdvancedModePanel(QWidget):
         self,
         image: np.ndarray,
         reference_bundle: PromptBundle,
-        exemplar: np.ndarray,
+        encoded_reference: Any,
         adapter: Sam3Adapter,
         roi_hw: tuple[int, int],
         overlap_fraction: float,
@@ -2335,7 +2545,7 @@ class AdvancedModePanel(QWidget):
             return self._segment_folder_batch_plane(
                 arr,
                 reference_bundle,
-                exemplar,
+                encoded_reference,
                 adapter,
                 roi_hw,
                 overlap_fraction,
@@ -2348,7 +2558,7 @@ class AdvancedModePanel(QWidget):
                 stack[z_index] = self._segment_folder_batch_plane(
                     np.asarray(arr[z_index]),
                     reference_bundle,
-                    exemplar,
+                    encoded_reference,
                     adapter,
                     roi_hw,
                     overlap_fraction,
@@ -2365,7 +2575,7 @@ class AdvancedModePanel(QWidget):
         self,
         plane: np.ndarray,
         reference_bundle: PromptBundle,
-        exemplar: np.ndarray,
+        encoded_reference: Any,
         adapter: Sam3Adapter,
         roi_hw: tuple[int, int],
         overlap_fraction: float,
@@ -2374,26 +2584,18 @@ class AdvancedModePanel(QWidget):
         z_index: int | None,
     ) -> np.ndarray:
         image_hw = (int(plane.shape[0]), int(plane.shape[1]))
-        exemplar_hw = tuple(int(value) for value in np.asarray(exemplar).shape[:2])
-        if exemplar_hw[0] > roi_hw[0] or exemplar_hw[1] > roi_hw[1]:
-            raise RuntimeError("The exemplar crop is larger than the tile size. Select a smaller crop or increase ROI size.")
+        plane_bundle = replace(
+            reference_bundle,
+            image=infer_image_selection(source_name, tuple(plane.shape)),
+        )
+        plane_layer = SimpleNamespace(data=plane, name=source_name)
         tiles = self._tile_bounds_for_image(image_hw, roi_hw, overlap_fraction)
         composed = np.zeros(image_hw, dtype=np.uint32)
         next_object_id = 1
         for _tile_index, bounds in enumerate(tiles, start=1):
-            tile = np.asarray(plane[bounds.y0 : bounds.y1, bounds.x0 : bounds.x1, ...])
-            augmented, tile_origin, exemplar_box = self._augmented_exemplar_tile(tile, exemplar)
-            tile_bundle = self._bundle_for_augmented_exemplar(reference_bundle, augmented, exemplar_box)
-            result = adapter.run_image(
-                augmented,
-                tile_bundle,
-                cache_context={"image_layer": source_name, "roi": (bounds.y0, bounds.x0, bounds.y1, bounds.x1)},
-            )
-            local_labels = self._result_labels_for_tile(
-                result,
-                augmented.shape,
-                tile_origin,
-                (bounds.height, bounds.width),
+            _result, local_labels, _boxes, _scores = self._infer_encoded_exemplar_tile(
+                adapter, plane_layer, plane_bundle, bounds,
+                encoded_reference=encoded_reference,
             )
             next_object_id = self._compose_tile_labels(composed, local_labels, bounds, next_object_id)
         if self.merge_tile_seams_check.isChecked():
@@ -2440,11 +2642,10 @@ class AdvancedModePanel(QWidget):
                 raise RuntimeError(cpu_error)
             image_layer = self.viewer.layers[bundle.image.layer_name]
             image_hw = self._selection_image_hw(bundle.image)
-            exemplar_hw = tuple(int(value) for value in np.asarray(exemplar).shape[:2])
-            if exemplar_hw[0] > roi_hw[0] or exemplar_hw[1] > roi_hw[1]:
-                raise RuntimeError(
-                    "The exemplar crop is larger than the tile size. Select a smaller crop or increase ROI size."
-                )
+            target_exemplar = (
+                None if self._external_exemplar_source_enabled()
+                else (bundle.exemplars[0] if bundle.exemplars else None)
+            )
             tiles = self._tile_bounds_for_image(image_hw, roi_hw, overlap_fraction)
             if not tiles:
                 raise RuntimeError(f"No tiles were generated for image layer '{bundle.image.layer_name}'.")
@@ -2472,6 +2673,12 @@ class AdvancedModePanel(QWidget):
             total_tiles = len(tiles)
             total_steps = frame_count * total_tiles
             scale = self._selection_scale_zyx(image_layer, bundle.image)
+            self._ensure_image_adapter_loaded_for_bundle(adapter, bundle)
+            yield "Encoding the exemplar once from the selected source slice…"
+            encoded_reference, reference_bounds = self._encode_scan_reference(
+                adapter, image_layer, bundle, exemplar, target_exemplar,
+                overlap_fraction=overlap_fraction,
+            )
             store = HugeVolumeMaskStore.create(
                 output_path,
                 shape=(frame_count, int(image_hw[0]), int(image_hw[1])),
@@ -2479,7 +2686,6 @@ class AdvancedModePanel(QWidget):
                 dtype=np.uint32,
                 scale=scale,
             )
-            self._ensure_image_adapter_loaded_for_bundle(adapter, bundle)
             total_written = 0
             step = 0
             for z_index in range(frame_count):
@@ -2493,23 +2699,9 @@ class AdvancedModePanel(QWidget):
                         f"z={z_index + 1}/{frame_count}, tile {tile_index}/{total_tiles}, "
                         f"y={bounds.y0}:{bounds.y1}, x={bounds.x0}:{bounds.x1}"
                     )
-                    tile = extract_2d_roi(image_layer.data, frame_selection, bounds)
-                    augmented, tile_origin, exemplar_box = self._augmented_exemplar_tile(tile, np.asarray(exemplar))
-                    tile_bundle = self._bundle_for_augmented_exemplar(frame_bundle, augmented, exemplar_box)
-                    result = adapter.run_image(
-                        augmented,
-                        tile_bundle,
-                        cache_context=self._cache_context_for_layer(
-                            image_layer,
-                            frame_bundle,
-                            roi_bounds=bounds,
-                        ),
-                    )
-                    local_labels = self._result_labels_for_tile(
-                        result,
-                        augmented.shape,
-                        tile_origin,
-                        (bounds.height, bounds.width),
+                    _result, local_labels, _boxes, _scores = self._infer_encoded_exemplar_tile(
+                        adapter, image_layer, frame_bundle, bounds,
+                        encoded_reference=encoded_reference,
                     )
                     next_object_id, written = store.write_tile_labels(
                         z_index,
@@ -2524,6 +2716,8 @@ class AdvancedModePanel(QWidget):
                 "frame_count": frame_count,
                 "tile_count": total_tiles,
                 "written_pixels": total_written,
+                "tile_prompting": "encoded_native_reference",
+                "reference_bounds_yxyx": reference_bounds,
             }
 
         def handle_z_stack_output(payload: object) -> None:
@@ -2732,6 +2926,64 @@ class AdvancedModePanel(QWidget):
         index, bounds = min(candidates, key=distance)
         return bounds, index + 1, len(tiles)
 
+    def _encode_scan_reference(
+        self, adapter, image_layer, bundle, exemplar, target_exemplar, *, overlap_fraction=.15,
+    ):
+        """Use the complete natural 8k scene, independent of target ROI size."""
+        if target_exemplar is None:
+            # Separate crop sources are encoded as their own image, never pasted
+            # into targets. A whole-crop prompt has only its supplied context.
+            data = np.asarray(exemplar)
+            box = BoxPrompt(y0=0.,x0=0.,y1=float(data.shape[0]),x1=float(data.shape[1]))
+            bounds = (0,0,int(data.shape[0]),int(data.shape[1]))
+        else:
+            ex = target_exemplar
+            hw = self._selection_image_hw(bundle.image)
+            candidates = [b for b in self._tile_bounds_for_image(hw,(8192,8192),overlap_fraction)
+                          if self._bounds_contain_exemplar(b,ex)]
+            cy,cx = (ex.y0+ex.y1)/2.,(ex.x0+ex.x1)/2.
+            if candidates:
+                chosen = min(candidates,key=lambda b:((b.y0+b.y1)/2.-cy)**2+((b.x0+b.x1)/2.-cx)**2)
+            else:
+                chosen = centered_roi_bounds(cy,cx,image_hw=hw,
+                    roi_hw=(max(8192,int(np.ceil(ex.y1)-np.floor(ex.y0))),
+                            max(8192,int(np.ceil(ex.x1)-np.floor(ex.x0)))))
+                chosen = RoiBounds(y0=min(chosen.y0,int(np.floor(ex.y0))),x0=min(chosen.x0,int(np.floor(ex.x0))),
+                                   y1=max(chosen.y1,int(np.ceil(ex.y1))),x1=max(chosen.x1,int(np.ceil(ex.x1))))
+            data = extract_2d_roi(image_layer.data,bundle.image,chosen)
+            box = BoxPrompt(y0=ex.y0-chosen.y0,x0=ex.x0-chosen.x0,
+                            y1=ex.y1-chosen.y0,x1=ex.x1-chosen.x0)
+            bounds = (chosen.y0,chosen.x0,chosen.y1,chosen.x1)
+        reference_bundle = self._bundle_for_augmented_exemplar(bundle,data,box)
+        return adapter.encode_exemplar(data,reference_bundle),bounds
+
+    def _infer_encoded_exemplar_tile(
+        self,
+        adapter: Sam3Adapter,
+        image_layer: Any,
+        bundle: PromptBundle,
+        bounds: RoiBounds,
+        *,
+        encoded_reference: Any,
+    ) -> tuple[Sam3Result, np.ndarray, np.ndarray, np.ndarray | None]:
+        """Run production scans on untouched tiles with a required reference."""
+        if encoded_reference is None:
+            raise RuntimeError("Encode the source exemplar before scanning tiles.")
+        tile = extract_2d_roi(image_layer.data, bundle.image, bounds)
+        tile_bundle = PromptBundle(
+            task=Sam3Task.EXEMPLAR,
+            image=infer_image_selection(bundle.image.layer_name, tuple(tile.shape)),
+        )
+        result = adapter.run_image_with_exemplar(
+            tile, tile_bundle, encoded_reference,
+            cache_context=self._cache_context_for_layer(image_layer, bundle, roi_bounds=bounds),
+        )
+        boxes = (
+            np.asarray(result.boxes_xyxy) if result.boxes_xyxy is not None
+            else np.zeros((0, 4), dtype=np.float32)
+        )
+        return result, np.asarray(result.labels, dtype=np.uint32), boxes, result.scores
+
     def _infer_tiled_exemplar_tile(
         self,
         adapter: Sam3Adapter,
@@ -2741,11 +2993,17 @@ class AdvancedModePanel(QWidget):
         exemplar: np.ndarray,
         *,
         target_exemplar: ExemplarPrompt | None = None,
+        force_reference: bool = False,
+        encoded_reference=None,
     ) -> tuple[Sam3Result, np.ndarray, np.ndarray, np.ndarray | None]:
-        """Run the canonical exemplar-tile input and decode its tile result."""
+        """Preview/experiment compatibility with legacy prompting modes."""
 
+        if encoded_reference is not None:
+            return self._infer_encoded_exemplar_tile(
+                adapter, image_layer, bundle, bounds, encoded_reference=encoded_reference,
+            )
         tile = extract_2d_roi(image_layer.data, bundle.image, bounds)
-        if target_exemplar is not None and self._bounds_contain_exemplar(
+        if not force_reference and target_exemplar is not None and self._bounds_contain_exemplar(
             bounds, target_exemplar
         ):
             augmented = np.asarray(tile)
@@ -2819,7 +3077,7 @@ class AdvancedModePanel(QWidget):
         *,
         tile_hw: tuple[int, int],
     ) -> tuple[np.ndarray, BoxPrompt]:
-        """Crop a contextual reference while retaining the original small box."""
+        """Crop context without discarding any part of the selected exemplar."""
 
         image_h, image_w = self._selection_image_hw(bundle.image)
         box_h = max(1.0, abs(float(exemplar.y1) - float(exemplar.y0)))
@@ -2840,6 +3098,14 @@ class AdvancedModePanel(QWidget):
             center_x,
             image_hw=(image_h, image_w),
             roi_hw=(context_side, context_side),
+        )
+        # The context budget limits padding, never the user's exemplar. Include
+        # its integer pixel envelope as well, including fractional box edges.
+        context_bounds = RoiBounds(
+            y0=max(0, min(context_bounds.y0, int(np.floor(exemplar.y0)))),
+            x0=max(0, min(context_bounds.x0, int(np.floor(exemplar.x0)))),
+            y1=min(image_h, max(context_bounds.y1, int(np.ceil(exemplar.y1)))),
+            x1=min(image_w, max(context_bounds.x1, int(np.ceil(exemplar.x1)))),
         )
         context = extract_2d_roi(image_layer.data, bundle.image, context_bounds)
         local_box = BoxPrompt(
@@ -2864,12 +3130,10 @@ class AdvancedModePanel(QWidget):
         if tile_arr.ndim == 3 and tile_arr.shape[-1] in (1, 3, 4) and exemplar_arr.ndim == 2:
             exemplar_arr = np.repeat(exemplar_arr[..., None], tile_arr.shape[-1], axis=-1)
         gap = 8
-        exemplar_h = min(int(exemplar_arr.shape[0]), int(tile_arr.shape[0]))
-        exemplar_w = min(int(exemplar_arr.shape[1]), int(tile_arr.shape[1]))
-        exemplar_crop = exemplar_arr[:exemplar_h, :exemplar_w]
-        out_shape = (tile_arr.shape[0], exemplar_w + gap + tile_arr.shape[1], *tile_arr.shape[2:])
+        exemplar_h, exemplar_w = exemplar_arr.shape[:2]
+        out_shape = (max(tile_arr.shape[0], exemplar_h), exemplar_w + gap + tile_arr.shape[1], *tile_arr.shape[2:])
         augmented = np.zeros(out_shape, dtype=tile_arr.dtype)
-        augmented[:exemplar_h, :exemplar_w, ...] = exemplar_crop
+        augmented[:exemplar_h, :exemplar_w, ...] = exemplar_arr
         tile_x0 = exemplar_w + gap
         augmented[: tile_arr.shape[0], tile_x0 : tile_x0 + tile_arr.shape[1], ...] = tile_arr
         if exemplar_box is None:
@@ -2880,12 +3144,7 @@ class AdvancedModePanel(QWidget):
                 x1=float(exemplar_w),
             )
         else:
-            box = BoxPrompt(
-                y0=float(np.clip(exemplar_box.y0, 0, exemplar_h)),
-                x0=float(np.clip(exemplar_box.x0, 0, exemplar_w)),
-                y1=float(np.clip(exemplar_box.y1, 0, exemplar_h)),
-                x1=float(np.clip(exemplar_box.x1, 0, exemplar_w)),
-            )
+            box = exemplar_box
         return augmented, (0, tile_x0), box
 
     def _bundle_for_augmented_exemplar(
@@ -4374,6 +4633,9 @@ class AdvancedModePanel(QWidget):
         worker.start()
 
     def _cancel_worker(self) -> None:
+        cancel = getattr(self, "_batch_experiment_cancel", None)
+        if cancel is not None:
+            cancel.set()
         if self._worker is not None:
             try:
                 self._worker.quit()

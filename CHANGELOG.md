@@ -2,6 +2,23 @@
 
 All notable changes to `napari-sam3-assistant` are documented here.
 
+## Unreleased
+
+### Changed
+- Made encoded native exemplar reuse the standard for all full-image tiled exemplar scans in Simple and Advanced modes, folder batches, and Z-stack scans. Production scans require an encoded reference and do not fall back to pasted-reference inference.
+- Encode a target-image exemplar once in its complete natural 8k source context, independent of target tile size. Separate crop sources use their supplied image; folder jobs reuse one encoding across all files/slices and Z-stack jobs reuse the selected source slice across the stack.
+- Kept local ROI preview behavior unchanged and retained legacy full-scan modes only as Batch Experiment comparison series.
+- Project encoded candidate masks at full target resolution one at a time, skip uniform tiles, and invalidate references after model reload or configuration changes.
+
+### Added
+- Added Batch Experiment beside the full-image scan button to sweep ROI sizes with frozen source pixels, exemplar and settings; save disk-backed masks, tile logs and comparison statistics; and reopen saved experiments without a loaded image, exemplar or model.
+- Added separate inspection of stitched masks before and after seam merging, with object counts, coverage and largest-mask measurements. Existing experiment folders remain readable.
+- Added a tiled exemplar study report documenting reference-transfer failures, native feature reuse and the remaining 2k/4k scale/context differences.
+
+### Fixed
+- Removed the requirement for an exemplar crop to fit inside target tiles in encoded scans, including folder and Z-stack scans.
+- Preserved the complete user-drawn exemplar box when selecting contextual reference pixels instead of clipping it to a 512-pixel cap or the target tile size.
+
 ## 4.5.0
 
 ### Added

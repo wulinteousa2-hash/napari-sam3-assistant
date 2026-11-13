@@ -27,10 +27,10 @@ instead of exposing every backend option at once.
 
 For `Simple > Exemplar` on a large image, enable tiled inference and choose the
 tile size and overlap. `Run Current ROI` tests the real scan-grid tile nearest
-the exemplar; `Scan Full Image` applies the same inference path across the
-image. A tile containing the exemplar uses its natural pixels and localized
-box, while other tiles use a context-preserving reference. Tiled composition
-keeps SAM3 instances separate even when neighboring masks touch.
+the exemplar using the original preview path. `Scan Full Image` encodes the
+exemplar in its natural 8k scene once, then reuses those contextual features on
+untouched target tiles. Tiled composition keeps instance IDs separate; optional
+seam merging happens afterward.
 
 Simple task tabs:
 
@@ -242,10 +242,13 @@ ROI behavior:
 - Point prompts use the latest point as the ROI anchor.
 - Box prompts use the box center and keep the box inside the local window when
   possible for non-exemplar tasks.
-- Exemplar previews snap to the actual full-scan grid tile nearest the box and
-  use the same inference path as the corresponding scan tile. A tile containing
-  the exemplar uses its natural pixels and localized box; other tiles use a
-  context-preserving reference crop with the original small box retained.
+- Exemplar previews retain their original behavior: a tile containing the
+  exemplar uses its natural pixels and localized box; other tiles use a pasted
+  contextual reference. Full-image tile scans instead encode the exemplar
+  once in its natural 8k scene and reuse those features on untouched tiles.
+  The encoded source context stays at 8k independently of target ROI size.
+  Folder batches and Z-stack scans use the same encoded reuse; a separate crop
+  is encoded from its supplied pixels rather than an 8k scene.
 - Tiled composition preserves SAM3 instance IDs, so touching neighboring objects
   are not collapsed into one label merely because their masks meet.
 - Live Points use the latest point as the ROI anchor.
@@ -277,6 +280,22 @@ to scan the whole 2D image.
    mode, or `Scan Full Image` in Simple mode.
 
 
+Every target tile uses the same encoded source features, including the tile
+containing the source box. No reference pixels are pasted into target tiles.
+The source context is selected independently of target tile size and retains
+the complete exemplar box. A separate crop is encoded as its own image.
+Uniform tiles are skipped. Masks are projected at full target resolution one
+candidate at a time to bound candidate-mask memory.
+
+ROI size still changes the target crop and its scale after SAM3's internal
+resize. Results at 2k, 4k and 8k can therefore differ. The local ROI preview
+retains its original prompting behavior; use **Batch Experiment** beside the
+scan button to compare the production scan path at different sizes. It retains
+legacy modes for controlled comparisons and saved-experiment review, including
+**Inspect Before** and **Inspect After** seam merging. See
+[Batch experiments](batch_experiments.md) and the
+[study report](reports/tiled_exemplar_study.md).
+
 The final composed scan can still differ in overlap regions because earlier
 tiles take precedence, and seam merging runs after all tiles are combined.
 Useful controls:
@@ -294,6 +313,11 @@ SAM3 tiled exemplar boxes
 
 ![Batch local exemplar segmentation scans large images tile by tile](tiled_exemplar_scan.png)
 
+For a stack, enable **Scan all Z slices to OME-Zarr** and use **Scan Z Stack by
+Tiles**. The exemplar is encoded once from the currently selected source slice
+(or separate crop), then reused across all target slices. Tile labels are
+written directly to OME-Zarr without a dense full-volume mask. This path still
+skips seam merging and cross-Z object linking; IDs are local to each slice.
 
 ## Experimental Folder Batch
 
@@ -309,6 +333,11 @@ of filling the viewer with result layers.
 6. If the local result is acceptable, check `Run folder batch`.
 7. In Step 4, choose `Input folder`, `Output folder`, and `Output format`.
 8. Click `Run Folder Batch`.
+
+The source exemplar is encoded once from the selected viewer image or crop,
+then reused across every target file and TIFF-stack slice. Reference pixels
+are never pasted into target tiles, and the exemplar need not fit the selected
+target tile size. Re-run the batch to capture a changed exemplar or source.
 
 Output files use the input stem plus `_mask`, for example:
 

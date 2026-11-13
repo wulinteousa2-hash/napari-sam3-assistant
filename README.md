@@ -30,6 +30,8 @@ corrected, saved, and exported.
 - In Advanced mode, run Phase 1 Huge Volume exemplar scans by processing 3D stacks slice by slice and writing tiled masks directly to OME-Zarr.
 - Scan large 2D images tile by tile from an exemplar ROI and stitch the result
   into full-size labels.
+- Compare ROI sizes using **Batch Experiment**, with fixed inputs, separate
+  prompting series, disk-backed masks and a saved comparison report.
 - Run experimental folder batch inference from a tested exemplar, writing TIFF
   or OME-Zarr masks to disk without loading full batch outputs into the viewer.
 - Propagate prompts through 3D stacks or video-like data when the installed SAM3
@@ -49,6 +51,8 @@ Start here:
 5. [Troubleshooting](docs/troubleshooting.md)
 6. [Huge Volume Mode](docs/huge_volume_mode.md)
 7. [Workspace Manager](docs/workspace_manager.md)
+8. [Batch experiments](docs/batch_experiments.md)
+9. [Tiled exemplar study and remaining ROI-size sensitivity](docs/reports/tiled_exemplar_study.md)
 
 Specialized setup:
 
@@ -75,10 +79,13 @@ Maintainer notes:
 For a large image in `Simple > Exemplar`, enable tiled inference, select the
 tile size and overlap, then use `Run Current ROI` to test the real scan-grid
 tile nearest the exemplar. If the preview is acceptable, use `Scan Full Image`.
-The preview and full scan share the same tile inference path: a tile containing
-the exemplar keeps its natural pixels and localized box, other tiles receive a
-context-preserving reference, and SAM3 instance IDs remain separate during
-composition.
+The preview keeps the original natural-box/pasted-reference behavior. All full
+exemplar scans encode the source once and reuse its features on untouched target
+tiles, including folder batches and Z-stack scans. A box from a viewer image
+uses its natural 8k source context; a separate crop uses the supplied image.
+Instance IDs remain separate during composition; seam merging is an independent
+later step. Use Batch Experiment to compare actual full-scan behavior across
+tile sizes, since the local preview uses a different prompting path.
 
 For full setup commands, see [Installation](docs/installation.md).
 
@@ -182,7 +189,27 @@ Exemplar scan loop:
 4. Review `SAM3 tiled exemplar labels` and `SAM3 tiled exemplar boxes`.
 5. Use `SAM3 Mask Operations` for cleanup, isolation, merge, and export.
 
-`Run Current ROI Only` snaps to the real scan-grid tile nearest the exemplar and uses the same inference path as `Scan Full Image by Tiles`. A tile containing the exemplar is processed with its natural pixels and the original box localized into that tile. Other tiles receive a context-preserving reference crop with the smaller original box retained inside it. SAM3 instance IDs remain separate during composition, including when neighboring masks touch. The final combined scan can still differ in overlapping regions because earlier tiles take precedence, and optional seam merging runs after all tile results are composed.
+`Scan Full Image by Tiles` uses encoded exemplar features for every tile,
+including the tile containing the original box. Folder batches reuse one source
+encoding across all files and slices; Z-stack scans reuse the encoding from the
+selected source slice across the stack. Separate crop sources are encoded from
+the supplied crop. Target tiles can be smaller than the exemplar because no
+reference pixels are pasted into them.
+
+Encoded scans produce full-resolution masks, project candidates one at a time
+to limit memory, and skip uniform tiles. Composition preserves instance IDs and
+gives earlier tiles precedence in overlaps; optional seam merging remains a
+separate step. Z-stack output still skips seam merging and cross-Z linking.
+References are recreated for each scan and invalidated by model reload or
+configuration changes. `Run Current ROI Only` retains its original preview
+behavior. Batch Experiment retains encoded and legacy series, saved reports,
+and inspection before/after seam merging.
+
+ROI size still controls the actual target crop: SAM3 resizes it internally, so
+2k, 4k and 8k may select different structures despite a fixed source encoding.
+The change addresses reference-transfer failures; it does not guarantee equal
+masks across tile sizes or biological accuracy. See [Batch experiments](docs/batch_experiments.md)
+and the [study report](docs/reports/tiled_exemplar_study.md).
 
 Experimental folder batch loop:
 
